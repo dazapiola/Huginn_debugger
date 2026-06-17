@@ -1,9 +1,9 @@
-"""CFG panel — QGraphicsScene graph of BasicBlocks with branch arrows."""
+"""CFG panel — draggable QGraphicsItem blocks with live-updating arrows."""
 from __future__ import annotations
 import math
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QGraphicsView, QGraphicsScene,
-    QGraphicsRectItem, QGraphicsTextItem,
+    QGraphicsRectItem, QGraphicsTextItem, QGraphicsItem,
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF
 from PyQt6.QtGui import (
@@ -14,140 +14,226 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from ui import theme
 
-_NODE_W       = 280
+# ── geometry constants ────────────────────────────────────────────────────────
+
+_NODE_W       = 460   # wide enough for long operands
 _NODE_PADDING = 8
 _LINE_H       = 16
-_H_GAP        = 60
-_V_GAP        = 40
+_H_GAP        = 80    # horizontal gap between sibling blocks
+_V_GAP        = 50    # vertical gap between layers
 
-_COL_NODE_BG    = QColor(theme.BG_SURFACE)
-_COL_NODE_BOR   = QColor(theme.BORDER)
-_COL_NODE_BOR_A = QColor(theme.ACCENT)       # active block border
-_COL_EDGE_JMP   = QColor(theme.FG_DIM)
-_COL_EDGE_TRUE  = QColor(theme.GREEN)
-_COL_EDGE_FALSE = QColor(theme.RED)
-_COL_EDGE_FALL  = QColor(theme.FG_DIM)
-_COL_ADDR       = QColor(theme.COL_ADDR)
-_COL_INSN       = QColor(theme.FG)
-_COL_MNEM_J     = QColor(theme.COL_JUMP)
-_COL_MNEM_C     = QColor(theme.COL_CALL)
-_COL_MNEM_R     = QColor(theme.COL_RET)
+# Column x-offsets inside a block (pixels from block left edge)
+_X_ADDR = 4
+_X_MNEM = 148   # after "  0x<12 hex chars>  " @ ~6px/char
+_X_OPS  = 220   # after typical 5-char mnemonic
 
+# ── colours ───────────────────────────────────────────────────────────────────
+
+_C_NODE_BG    = QColor(theme.BG_SURFACE)
+_C_NODE_BOR   = QColor(theme.BORDER)
+_C_NODE_BOR_A = QColor(theme.ACCENT)
+_C_EDGE_JMP   = QColor(theme.FG_DIM)
+_C_EDGE_TRUE  = QColor(theme.GREEN)
+_C_EDGE_FALSE = QColor(theme.RED)
+_C_EDGE_FALL  = QColor(theme.FG_DIM)
+_C_ADDR       = QColor(theme.COL_ADDR)
+_C_FG         = QColor(theme.FG)
+_C_MNEM_J     = QColor(theme.COL_JUMP)
+_C_MNEM_C     = QColor(theme.COL_CALL)
+_C_MNEM_R     = QColor(theme.COL_RET)
+
+
+# ── arrow item (live-updating when blocks are dragged) ────────────────────────
+
+class _ArrowItem(QGraphicsItem):
+    """Arrow from the bottom-center of src to the top-center of dst.
+    Redraws itself automatically when either block is moved."""
+
+    def __init__(self, src: "_BlockItem", dst: "_BlockItem",
+                 colour: QColor) -> None:
+        super().__init__()
+        self._src    = src
+        self._dst    = dst
+        self._colour = colour
+        self._pen    = QPen(colour, 1.4, Qt.PenStyle.SolidLine)
+        self._pen.setCosmetic(True)
+        self.setZValue(-1)
+        src.register_arrow(self)
+        dst.register_arrow(self)
+
+    # QGraphicsItem protocol ──────────────────────────────────────────────────
+
+    def boundingRect(self) -> QRectF:
+        sp, dp = self._endpoints()
+        r = QRectF(
+            min(sp.x(), dp.x()),
+            min(sp.y(), dp.y()),
+            abs(dp.x() - sp.x()),
+            abs(dp.y() - sp.y()),
+        )
+        return r.adjusted(-12, -12, 12, 12)
+
+    def paint(self, painter: QPainter, _option, _widget=None) -> None:
+        sp, dp = self._endpoints()
+        painter.setPen(self._pen)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.drawLine(sp, dp)
+        # Arrowhead at dst
+        angle = math.atan2(dp.y() - sp.y(), dp.x() - sp.x())
+        size  = 9
+        p1 = QPointF(dp.x() - size * math.cos(angle - math.pi / 6),
+                     dp.y() - size * math.sin(angle - math.pi / 6))
+        p2 = QPointF(dp.x() - size * math.cos(angle + math.pi / 6),
+                     dp.y() - size * math.sin(angle + math.pi / 6))
+        painter.drawLine(dp, p1)
+        painter.drawLine(dp, p2)
+
+    # Called by blocks on move ────────────────────────────────────────────────
+
+    def notify_block_moved(self) -> None:
+        self.prepareGeometryChange()
+        self.update()
+
+    # Helpers ─────────────────────────────────────────────────────────────────
+
+    def _endpoints(self) -> tuple[QPointF, QPointF]:
+        sr = self._src.sceneBoundingRect()
+        dr = self._dst.sceneBoundingRect()
+        return (
+            QPointF(sr.center().x(), sr.bottom()),
+            QPointF(dr.center().x(), dr.top()),
+        )
+
+
+# ── block item ────────────────────────────────────────────────────────────────
 
 class _BlockItem(QGraphicsRectItem):
+    """A draggable basic-block node."""
+
     def __init__(self, block, is_active: bool = False) -> None:
-        lines = [f"  {hex(i.address):<12s}  {i.mnemonic} {i.op_str}" for i in block.instructions]
-        height = _NODE_PADDING * 2 + len(lines) * _LINE_H + _LINE_H  # header row
+        n_insns = len(block.instructions)
+        height  = _NODE_PADDING * 2 + (n_insns + 1) * _LINE_H  # +1 header row
         super().__init__(0, 0, _NODE_W, height)
 
-        bor = _COL_NODE_BOR_A if is_active else _COL_NODE_BOR
+        bor = _C_NODE_BOR_A if is_active else _C_NODE_BOR
         self.setPen(QPen(bor, 1.5))
-        self.setBrush(QBrush(_COL_NODE_BG))
+        self.setBrush(QBrush(_C_NODE_BG))
 
-        # Header
-        header = QGraphicsTextItem(f"  0x{block.start_addr:x}", self)
-        header.setDefaultTextColor(_COL_ADDR)
-        header.setFont(theme.mono_font(10))
-        header.setPos(_NODE_PADDING, _NODE_PADDING)
+        # Make the block draggable and emit position-changed events
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
 
-        # Instructions
+        self._arrows: list[_ArrowItem] = []
+
+        # Header row
+        hdr = QGraphicsTextItem(f"  0x{block.start_addr:016x}", self)
+        hdr.setDefaultTextColor(_C_ADDR)
+        hdr.setFont(theme.mono_font(9))
+        hdr.setPos(_X_ADDR, _NODE_PADDING)
+
+        # Instruction rows
         for idx, insn in enumerate(block.instructions):
             y = _NODE_PADDING + _LINE_H + idx * _LINE_H
-            addr_txt = QGraphicsTextItem(f"  {hex(insn.address):<12s}", self)
-            addr_txt.setDefaultTextColor(QColor(theme.COL_ADDR))
-            addr_txt.setFont(theme.mono_font(9))
-            addr_txt.setPos(0, y)
 
-            if insn.is_ret:   mnem_col = _COL_MNEM_R
-            elif insn.is_call: mnem_col = _COL_MNEM_C
-            elif insn.is_jump: mnem_col = _COL_MNEM_J
-            else:              mnem_col = _COL_INSN
+            addr_t = QGraphicsTextItem(f"  {hex(insn.address)}", self)
+            addr_t.setDefaultTextColor(_C_ADDR)
+            addr_t.setFont(theme.mono_font(9))
+            addr_t.setPos(_X_ADDR, y)
 
-            mnem_txt = QGraphicsTextItem(f"  {insn.mnemonic}", self)
-            mnem_txt.setDefaultTextColor(mnem_col)
-            mnem_txt.setFont(theme.mono_font(9))
-            mnem_txt.setPos(100, y)
+            if insn.is_ret:    mc = _C_MNEM_R
+            elif insn.is_call: mc = _C_MNEM_C
+            elif insn.is_jump: mc = _C_MNEM_J
+            else:              mc = _C_FG
 
-            ops_txt = QGraphicsTextItem(f"  {insn.op_str}", self)
-            ops_txt.setDefaultTextColor(QColor(theme.COL_OPS))
-            ops_txt.setFont(theme.mono_font(9))
-            ops_txt.setPos(160, y)
+            mnem_t = QGraphicsTextItem(insn.mnemonic, self)
+            mnem_t.setDefaultTextColor(mc)
+            mnem_t.setFont(theme.mono_font(9))
+            mnem_t.setPos(_X_MNEM, y)
+
+            ops_t = QGraphicsTextItem(insn.op_str, self)
+            ops_t.setDefaultTextColor(QColor(theme.COL_OPS))
+            ops_t.setFont(theme.mono_font(9))
+            ops_t.setPos(_X_OPS, y)
+
+    # Arrow registry ──────────────────────────────────────────────────────────
+
+    def register_arrow(self, arrow: _ArrowItem) -> None:
+        self._arrows.append(arrow)
+
+    # Notify connected arrows on drag ─────────────────────────────────────────
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            for arrow in self._arrows:
+                arrow.notify_block_moved()
+        return super().itemChange(change, value)
 
 
-def _arrow(scene: QGraphicsScene, src: QPointF, dst: QPointF, colour: QColor) -> None:
-    """Draw a line with a small arrowhead at dst."""
-    pen = QPen(colour, 1.2, Qt.PenStyle.SolidLine)
-    pen.setCosmetic(True)
+# ── layout ────────────────────────────────────────────────────────────────────
 
-    line = scene.addLine(src.x(), src.y(), dst.x(), dst.y(), pen)
-    line.setZValue(-1)
-
-    # Arrowhead
-    angle = math.atan2(dst.y() - src.y(), dst.x() - src.x())
-    size  = 8
-    p1 = QPointF(
-        dst.x() - size * math.cos(angle - math.pi / 6),
-        dst.y() - size * math.sin(angle - math.pi / 6),
-    )
-    p2 = QPointF(
-        dst.x() - size * math.cos(angle + math.pi / 6),
-        dst.y() - size * math.sin(angle + math.pi / 6),
-    )
-    scene.addLine(dst.x(), dst.y(), p1.x(), p1.y(), pen)
-    scene.addLine(dst.x(), dst.y(), p2.x(), p2.y(), pen)
+def _block_height(block) -> float:
+    return _NODE_PADDING * 2 + (len(block.instructions) + 1) * _LINE_H
 
 
 def _layout_dag(G) -> dict[int, tuple[float, float]]:
     """
-    Simple top-down layered layout.
-    Returns {node_addr: (x, y)} positions for the top-left corner of each block.
+    Top-down layered layout.
+    Returns {node_addr: (x, y)} for the top-left corner of each block.
     """
     import networkx as nx
 
     if G.number_of_nodes() == 0:
         return {}
 
-    # Topological sort for layering (handle cycles with a simple BFS)
     try:
         order = list(nx.topological_sort(G))
     except nx.NetworkXUnfeasible:
         order = list(G.nodes)
 
+    # Assign each node to a layer (longest path from entry)
     layers: dict[int, int] = {}
     for node in order:
         preds = list(G.predecessors(node))
         layers[node] = max((layers.get(p, 0) for p in preds), default=-1) + 1
 
-    # Group by layer
+    # Group nodes by layer
     by_layer: dict[int, list[int]] = {}
     for node, layer in layers.items():
         by_layer.setdefault(layer, []).append(node)
 
-    # Assign x/y
-    positions: dict[int, tuple[float, float]] = {}
-    block_heights: dict[int, float] = {
-        addr: G.nodes[addr]["block"].size * _LINE_H + _NODE_PADDING * 2 + _LINE_H
-        for addr in G.nodes
-    }
+    # Compute cumulative y per layer (use actual rendered block heights)
+    layer_y: dict[int, float] = {}
+    current_y = 0.0
+    for layer_idx in sorted(by_layer.keys()):
+        layer_y[layer_idx] = current_y
+        max_h = max(
+            _block_height(G.nodes[n]["block"])
+            for n in by_layer[layer_idx]
+        )
+        current_y += max_h + _V_GAP
 
-    for layer, nodes in sorted(by_layer.items()):
-        total_w = len(nodes) * _NODE_W + (len(nodes) - 1) * _H_GAP
-        start_x = -total_w / 2
-        y = layer * (max(block_heights.get(n, 80) for n in nodes) + _V_GAP)
-        for i, node in enumerate(nodes):
+    # Assign x positions (center the layer horizontally)
+    positions: dict[int, tuple[float, float]] = {}
+    for layer_idx, nodes in sorted(by_layer.items()):
+        count    = len(nodes)
+        total_w  = count * _NODE_W + (count - 1) * _H_GAP
+        start_x  = -total_w / 2.0
+        y        = layer_y[layer_idx]
+        for i, node in enumerate(sorted(nodes)):
             x = start_x + i * (_NODE_W + _H_GAP)
             positions[node] = (x, y)
 
     return positions
 
 
-class CfgView(QGraphicsView):
-    """Zoom with wheel, pan with middle-button or right-button drag."""
+# ── view ──────────────────────────────────────────────────────────────────────
 
+class CfgView(QGraphicsView):
     def __init__(self, scene: QGraphicsScene) -> None:
         super().__init__(scene)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setBackgroundBrush(QBrush(QColor(theme.BG_ALT)))
 
@@ -155,6 +241,8 @@ class CfgView(QGraphicsView):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         self.scale(factor, factor)
 
+
+# ── panel ─────────────────────────────────────────────────────────────────────
 
 class CfgPanel(QWidget):
     def __init__(self, session) -> None:
@@ -184,40 +272,33 @@ class CfgPanel(QWidget):
         self._scene.clear()
         positions = _layout_dag(G)
 
-        # Draw nodes
-        node_rects: dict[int, QRectF] = {}
+        # Create block items
+        block_items: dict[int, _BlockItem] = {}
         for node_addr, (x, y) in positions.items():
-            block    = G.nodes[node_addr]["block"]
-            is_active = (node_addr == self._active_addr)
-            item      = _BlockItem(block, is_active)
+            block   = G.nodes[node_addr]["block"]
+            is_act  = (node_addr == self._active_addr)
+            item    = _BlockItem(block, is_act)
             item.setPos(x, y)
             self._scene.addItem(item)
-            node_rects[node_addr] = QRectF(x, y, _NODE_W, item.rect().height())
+            block_items[node_addr] = item
 
-        # Draw edges
+        # Create arrow items (they self-register on both endpoints)
+        _edge_colours = {
+            "true":  _C_EDGE_TRUE,
+            "false": _C_EDGE_FALSE,
+            "jmp":   _C_EDGE_JMP,
+            "fall":  _C_EDGE_FALL,
+        }
         for src, dst, data in G.edges(data=True):
-            if src not in node_rects or dst not in node_rects:
+            if src not in block_items or dst not in block_items:
                 continue
-            kind    = data.get("kind", "fall")
-            colour  = {
-                "true":  _COL_EDGE_TRUE,
-                "false": _COL_EDGE_FALSE,
-                "jmp":   _COL_EDGE_JMP,
-                "fall":  _COL_EDGE_FALL,
-            }.get(kind, _COL_EDGE_FALL)
-
-            src_r = node_rects[src]
-            dst_r = node_rects[dst]
-
-            # Connect bottom-center of src to top-center of dst
-            src_pt = QPointF(src_r.center().x(), src_r.bottom())
-            dst_pt = QPointF(dst_r.center().x(), dst_r.top())
-            _arrow(self._scene, src_pt, dst_pt, colour)
+            colour = _edge_colours.get(data.get("kind", "fall"), _C_EDGE_FALL)
+            arrow  = _ArrowItem(block_items[src], block_items[dst], colour)
+            self._scene.addItem(arrow)
 
         self._view.fitInView(self._scene.itemsBoundingRect(),
                              Qt.AspectRatioMode.KeepAspectRatio)
 
     def highlight_block(self, addr: int) -> None:
-        """Highlight the block containing addr and re-render."""
         self._active_addr = addr
         self.refresh(addr)

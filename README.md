@@ -140,17 +140,24 @@ Huginn/
 |---|---|---|
 | **Fase 1** | Core engine: LIEF + Capstone + CFG + Session | ✅ Completa |
 | **Fase 2** | UI estática: ventana Qt con los 5 paneles | ✅ Completa |
-| **Fase 3** | Backend Frida: attach/spawn, breakpoints, registros | 🔜 Próxima |
+| **Fase 3** | Backend Frida: attach/spawn, breakpoints, registros | ✅ Completa |
 | **Fase 4** | Live panels: registros y stack en tiempo real | ⏳ Pendiente |
 | **Fase 5** | Polish: toolbar completo, menú Debug habilitado | ⏳ Pendiente |
 | **Fase 6** | Plugin mona (Corelan): exploiting tools integradas | ⏳ Pendiente |
 
 ---
 
-## Verificación rápida (Fase 1)
+## Verificación rápida
 
 ```bash
+# Fase 1 — core engine (static analysis)
 python3 test_phase1.py
+
+# Fase 3 — Frida dynamic backend
+python3 test_phase3.py
 ```
 
-Carga el binario `../clase1/crackme`, imprime disassembly, hex dump, CFG y módulos por consola. Útil para verificar que el core funciona sin necesitar pantalla.
+`test_phase1.py` carga `../clase1/crackme` y verifica disassembly, CFG y hex dump por consola.  
+`test_phase3.py` requiere `../clase1/crackme_dyn` (compilado con `gcc -g -O0`): spawn, módulos, lectura de memoria, breakpoints y registros en tiempo real.
+
+> **Nota**: Frida requiere que el target sea un binario dinámicamente linkeado. El `crackme` original (estático) no es compatible con la inyección de Frida.
