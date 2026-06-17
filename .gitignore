@@ -1,0 +1,53 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Plan files (internal Claude Code artifacts)
+.plan/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Pyright / type checkers
+pyrightconfig.json
+.mypy_cache/
+.pytype/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.xwd
+*.png
+/tmp/
+
+# Compiled binaries (clase1 is a sibling dir, not tracked here)
+*.o
+*.bin
+*.so
+*.pyd
+
+# Logs
+*.log
+
+# Frida compiled agents (when we have them)
+frida_agent/*.js.map
