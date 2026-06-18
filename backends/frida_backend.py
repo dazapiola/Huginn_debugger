@@ -81,7 +81,13 @@ class FridaBackend(DebuggerBackend):
             payload = message.get("payload", {})
             if payload.get("type") == "bp_hit":
                 raw = payload.get("regs", {})
-                self._regs = {k: int(v, 16) for k, v in raw.items()}
+                parsed: dict[str, int] = {}
+                for k, v in raw.items():
+                    try:
+                        parsed[k] = int(str(v), 16)
+                    except (ValueError, TypeError):
+                        parsed[k] = 0
+                self._regs = parsed
                 self._last_bp = payload.get("addr")
                 self._bp_event.set()
                 if self._stop_callback:

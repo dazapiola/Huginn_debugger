@@ -2,27 +2,27 @@
 
 var _bps = {};   // hex-addr-string -> InvocationListener
 
+function toHex(val) {
+    // NativePointer.toString() always returns '0x...' hex — but guard against
+    // plain JS numbers (e.g. rflags on some Frida versions) which return decimal.
+    var s = val.toString();
+    if (s.indexOf('0x') === 0 || s.indexOf('-0x') === 0) return s;
+    // Treat as a decimal integer and convert to hex
+    return '0x' + (parseInt(s, 10) >>> 0).toString(16);
+}
+
 function collectRegs(ctx) {
-    var r = {
-        rax: ctx.rax.toString(),
-        rbx: ctx.rbx.toString(),
-        rcx: ctx.rcx.toString(),
-        rdx: ctx.rdx.toString(),
-        rsi: ctx.rsi.toString(),
-        rdi: ctx.rdi.toString(),
-        rbp: ctx.rbp.toString(),
-        rsp: ctx.rsp.toString(),
-        r8:  ctx.r8.toString(),
-        r9:  ctx.r9.toString(),
-        r10: ctx.r10.toString(),
-        r11: ctx.r11.toString(),
-        r12: ctx.r12.toString(),
-        r13: ctx.r13.toString(),
-        r14: ctx.r14.toString(),
-        r15: ctx.r15.toString(),
-        rip: ctx.pc.toString(),
-    };
-    try { r.rflags = ctx.rflags.toString(); } catch (_) { r.rflags = '0x0'; }
+    var names = ['rax','rbx','rcx','rdx','rsi','rdi','rbp','rsp',
+                 'r8','r9','r10','r11','r12','r13','r14','r15'];
+    var r = {};
+    for (var i = 0; i < names.length; i++) {
+        var n = names[i];
+        try { r[n] = toHex(ctx[n]); } catch (_) { r[n] = '0x0'; }
+    }
+    try { r.rip    = toHex(ctx.pc);     } catch (_) { r.rip    = '0x0'; }
+    try { r.rflags = toHex(ctx.rflags); } catch (_) { r.rflags = '0x0'; }
+    try { r.cs     = toHex(ctx.cs);     } catch (_) { r.cs     = '0x0'; }
+    try { r.ss     = toHex(ctx.ss);     } catch (_) { r.ss     = '0x0'; }
     return r;
 }
 
