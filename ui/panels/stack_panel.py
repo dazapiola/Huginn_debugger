@@ -47,6 +47,9 @@ class StackPanel(QWidget):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self._table.setItem(row, col, item)
 
+    def clear(self) -> None:
+        self._populate_empty()
+
     def refresh(self) -> None:
         regs = self._session.backend.get_registers()
         rsp  = regs.get("rsp") or regs.get("RSP")

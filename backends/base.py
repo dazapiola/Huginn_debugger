@@ -2,7 +2,10 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from core.binary import BinaryInfo
 
 
 @dataclass
@@ -36,7 +39,7 @@ class DebuggerBackend(ABC):
     # ── loading ───────────────────────────────────────────────────────────────
 
     @abstractmethod
-    def load(self, path: str): ...
+    def load(self, path: str) -> "BinaryInfo": ...
 
     # ── process control (dynamic only) ────────────────────────────────────────
 
@@ -47,6 +50,9 @@ class DebuggerBackend(ABC):
         raise NotImplementedError("spawn not supported in static mode")
 
     def detach(self) -> None:
+        pass
+
+    def set_stop_callback(self, _cb) -> None:
         pass
 
     # ── memory ────────────────────────────────────────────────────────────────

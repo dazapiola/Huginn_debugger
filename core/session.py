@@ -24,9 +24,14 @@ class Session:
     _mona_log_handlers: list[Callable[[str], None]] = field(
         default_factory=list, repr=False
     )
+    _stop_listeners: list[Callable[[int], None]] = field(
+        default_factory=list, repr=False
+    )
 
     def setup(self, backend: "DebuggerBackend") -> None:
         self._backend = backend
+        if hasattr(backend, "set_stop_callback"):
+            backend.set_stop_callback(self.notify_stopped)
 
     @property
     def backend(self) -> "DebuggerBackend":
@@ -55,6 +60,17 @@ class Session:
         from core.cfg import build_cfg
         data = self.backend.read_memory(addr, max_bytes)
         return build_cfg(self._cs, data, addr, max_bytes=max_bytes)
+
+    # ── stop event ───────────────────────────────────────────────────────────
+
+    def notify_stopped(self, rip: int) -> None:
+        """Called from any thread when the process pauses (breakpoint / step)."""
+        self.current_address = rip
+        for fn in self._stop_listeners:
+            fn(rip)
+
+    def on_stopped(self, fn: Callable[[int], None]) -> None:
+        self._stop_listeners.append(fn)
 
     # ── mona logging bridge ───────────────────────────────────────────────────
 

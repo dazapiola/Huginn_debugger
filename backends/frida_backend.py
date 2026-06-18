@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -18,21 +18,26 @@ class FridaBackend(DebuggerBackend):
     """Dynamic backend using Frida for live process debugging."""
 
     def __init__(self) -> None:
-        self._device:      Optional[frida.core.Device]  = None
-        self._session:     Optional[frida.core.Session] = None
-        self._script:      Optional[frida.core.Script]  = None
-        self._rpc          = None                       # set by _load_agent()
-        self._pid:         Optional[int]                = None
-        self._regs:        dict[str, int]               = {}
-        self._last_bp:     Optional[str]                = None
-        self._bp_event     = threading.Event()
-        self._binary_info  = None                       # set by load()
+        self._device:          Optional[frida.core.Device]  = None
+        self._session:         Optional[frida.core.Session] = None
+        self._script:          Optional[frida.core.Script]  = None
+        self._rpc              = None                       # set by _load_agent()
+        self._pid:             Optional[int]                = None
+        self._regs:            dict[str, int]               = {}
+        self._last_bp:         Optional[str]                = None
+        self._bp_event         = threading.Event()
+        self._binary_info      = None                       # set by load()
+        self._stop_callback:   Optional[Callable[[int], None]] = None
+
+    def set_stop_callback(self, cb: Callable[[int], None]) -> None:
+        self._stop_callback = cb
 
     # ── loading ───────────────────────────────────────────────────────────────
 
-    def load(self, path: str) -> None:
+    def load(self, path: str):
         from core.binary import load as lief_load
         self._binary_info = lief_load(path)
+        return self._binary_info
 
     # ── process control ───────────────────────────────────────────────────────
 
@@ -42,6 +47,8 @@ class FridaBackend(DebuggerBackend):
         self._pid = pid
         self._session = self._device.attach(pid)
         self._load_agent()
+        if self._binary_info:
+            self._rpc.set_breakpoint(hex(self._binary_info.entry_point))
         self._device.resume(pid)
 
     def attach(self, pid: int) -> None:
@@ -77,6 +84,9 @@ class FridaBackend(DebuggerBackend):
                 self._regs = {k: int(v, 16) for k, v in raw.items()}
                 self._last_bp = payload.get("addr")
                 self._bp_event.set()
+                if self._stop_callback:
+                    rip = self._regs.get("rip", 0)
+                    self._stop_callback(rip)
             elif payload.get("type") == "bp_error":
                 print(f"[frida] bp_error @ {payload.get('addr')}: {payload.get('msg')}")
         elif message.get("type") == "error":
