@@ -4,8 +4,8 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QDockWidget, QFileDialog, QLabel,
-    QToolBar, QStatusBar, QMessageBox,
+    QMainWindow, QDockWidget, QFileDialog, QInputDialog,
+    QLabel, QStatusBar, QMessageBox,
 )
 from PyQt6.QtCore import Qt, QSize, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence
@@ -26,7 +26,7 @@ def _check_dynamic_compatible(path: str) -> str | None:
         import lief
         binary = lief.parse(path)
         if binary is None:
-            return None  # let Frida fail with its own error
+            return None
         fmt = str(binary.format)
         if "ELF" in fmt:
             has_interp = any("INTERP" in str(s.type) for s in binary.segments)
@@ -40,8 +40,7 @@ def _check_dynamic_compatible(path: str) -> str | None:
                 )
         elif "PE" in fmt:
             try:
-                imports = list(binary.imports)
-                if not imports:
+                if not list(binary.imports):
                     return (
                         f"'{path}' es un PE sin imports — posiblemente estático.\n\n"
                         "Frida necesita que el target tenga una tabla de imports (IAT)."
@@ -79,7 +78,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.session = Session()
 
-        # Wire cross-thread stop signal before setting up the backend
         self._stop_signal = _StopSignal(self)
         self._stop_signal.fired.connect(self._on_process_stopped)
         self.session.on_stopped(lambda _rip: self._stop_signal.fired.emit())
@@ -97,7 +95,6 @@ class MainWindow(QMainWindow):
             QMainWindow.DockOption.AllowTabbedDocks |
             QMainWindow.DockOption.AnimatedDocks
         )
-
         self._create_panels()
         self._create_menus()
         self._create_toolbar()
@@ -116,26 +113,39 @@ class MainWindow(QMainWindow):
     def _create_menus(self) -> None:
         mb = self.menuBar()
 
-        # File
+        # ── File ──────────────────────────────────────────────────────────────
         file_menu = mb.addMenu("&File")
-        self._act_open = self._action("Open binary…", "Ctrl+O", self.open_file)
-        self._act_exit = self._action("Exit",          "Ctrl+Q", self.close)
+        self._act_open   = self._action("Open binary…",         "Ctrl+O", self.open_file)
+        self._act_attach = self._action("Attach to process…",   "Ctrl+P", self._do_attach)
+        self._act_export = self._action("Export disassembly…",  "Ctrl+E", self._do_export,
+                                        enabled=False)
+        self._act_exit   = self._action("Exit",                 "Ctrl+Q", self.close)
         file_menu.addAction(self._act_open)
+        file_menu.addAction(self._act_attach)
+        file_menu.addSeparator()
+        file_menu.addAction(self._act_export)
         file_menu.addSeparator()
         file_menu.addAction(self._act_exit)
 
-        # Debug — Run always enabled (asks for file if none loaded)
+        # ── Debug ─────────────────────────────────────────────────────────────
         debug_menu = mb.addMenu("&Debug")
-        self._act_run    = self._action("Run / Spawn",   "F5",  self._do_spawn)
-        self._act_step   = self._action("Step",          "F7",  self._do_step,      enabled=False)
-        self._act_stepov = self._action("Step Over",     "F8",  self._do_step_over, enabled=False)
-        self._act_cont   = self._action("Continue",      "F9",  self._do_continue,  enabled=False)
-        self._act_stop   = self._action("Stop",          "F12", self._do_stop,      enabled=False)
-        for act in (self._act_run, self._act_step, self._act_stepov,
-                    self._act_cont, self._act_stop):
-            debug_menu.addAction(act)
+        self._act_run      = self._action("Run / Spawn",       "F5",     self._do_spawn)
+        self._act_step     = self._action("Step",              "F7",     self._do_step,      enabled=False)
+        self._act_stepov   = self._action("Step Over",         "F8",     self._do_step_over, enabled=False)
+        self._act_cont     = self._action("Continue",          "F9",     self._do_continue,  enabled=False)
+        self._act_stop     = self._action("Stop",              "F12",    self._do_stop,      enabled=False)
+        debug_menu.addAction(self._act_run)
+        debug_menu.addAction(self._act_step)
+        debug_menu.addAction(self._act_stepov)
+        debug_menu.addAction(self._act_cont)
+        debug_menu.addAction(self._act_stop)
+        debug_menu.addSeparator()
+        self._act_toggle_bp = self._action("Toggle Breakpoint", "F2",    self._do_toggle_bp, enabled=False)
+        self._act_goto      = self._action("Go to Address…",   "Ctrl+G", self._do_goto,      enabled=False)
+        debug_menu.addAction(self._act_toggle_bp)
+        debug_menu.addAction(self._act_goto)
 
-        # View
+        # ── View ──────────────────────────────────────────────────────────────
         view_menu = mb.addMenu("&View")
         for title, dock_attr in (
             ("Disassembly", "_dock_disasm"),
@@ -149,7 +159,7 @@ class MainWindow(QMainWindow):
             act.setChecked(True)
             view_menu.addAction(act)
 
-        # Plugins (stub — mona added in Phase 6)
+        # ── Plugins ───────────────────────────────────────────────────────────
         self._plugins_menu = mb.addMenu("&Plugins")
         self._plugins_menu.addAction(
             self._action("Mona  (not loaded)", None, self._noop, enabled=False)
@@ -161,6 +171,7 @@ class MainWindow(QMainWindow):
         tb.setIconSize(QSize(16, 16))
 
         tb.addAction(self._act_open)
+        tb.addAction(self._act_attach)
         tb.addSeparator()
         tb.addAction(self._act_run)
         tb.addAction(self._act_step)
@@ -208,19 +219,14 @@ class MainWindow(QMainWindow):
 
         self.tabifyDockWidget(self._dock_regs, self._dock_stack)
         self._dock_regs.raise_()
-
         self.tabifyDockWidget(self._dock_hex, self._dock_cfg)
         self._dock_cfg.raise_()
 
         self.resizeDocks(
-            [self._dock_disasm, self._dock_regs],
-            [900, 480],
-            Qt.Orientation.Horizontal,
+            [self._dock_disasm, self._dock_regs], [900, 480], Qt.Orientation.Horizontal,
         )
         self.resizeDocks(
-            [self._dock_disasm, self._dock_cfg],
-            [540, 340],
-            Qt.Orientation.Vertical,
+            [self._dock_disasm, self._dock_cfg], [540, 340], Qt.Orientation.Vertical,
         )
 
     # ── file actions ──────────────────────────────────────────────────────────
@@ -233,7 +239,6 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            # Switch back to static backend if we were dynamic
             if not isinstance(self.session.backend, StaticBackend):
                 try:
                     self.session.backend.detach()
@@ -249,8 +254,38 @@ class MainWindow(QMainWindow):
                 f"  {b.name}  ·  {b.fmt}  ·  {b.arch}/{b.bits}bit  ·  entry {hex(b.entry_point)}"
             )
             self._status_addr.setText(f"@ {hex(b.entry_point)}")
+            self._act_export.setEnabled(True)
+            self._act_toggle_bp.setEnabled(True)
+            self._act_goto.setEnabled(True)
         except Exception as exc:
             QMessageBox.critical(self, "Error loading binary", str(exc))
+
+    def _do_export(self) -> None:
+        if self.session.binary is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export disassembly", f"{self.session.binary.name}.asm",
+            "Text files (*.asm *.txt);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            rows = self.disasm_panel._model._rows
+            lines = [
+                f"; Disassembly of {self.session.binary.name}",
+                f"; Entry point: {hex(self.session.binary.entry_point)}",
+                "",
+            ]
+            for insn in rows:
+                comment = f"  → 0x{insn.jump_target:x}" if insn.jump_target else ""
+                lines.append(
+                    f"0x{insn.address:08x}  {insn.hex_bytes:<24}  {insn.mnemonic} {insn.op_str}{comment}"
+                )
+            with open(path, "w") as f:
+                f.write("\n".join(lines))
+            self.statusBar().showMessage(f"Exported {len(rows)} instructions to {path}", 4000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export error", str(exc))
 
     # ── debug actions ─────────────────────────────────────────────────────────
 
@@ -266,6 +301,21 @@ class MainWindow(QMainWindow):
             if not path:
                 return
         self._start_dynamic(path)
+
+    def _do_attach(self) -> None:
+        if self._worker and self._worker.isRunning():
+            return
+        pid_str, ok = QInputDialog.getText(
+            self, "Attach to process", "PID:"
+        )
+        if not ok or not pid_str.strip():
+            return
+        try:
+            pid = int(pid_str.strip())
+        except ValueError:
+            QMessageBox.warning(self, "PID inválido", f"'{pid_str}' no es un número válido.")
+            return
+        self._start_attach(pid)
 
     def _start_dynamic(self, path: str) -> None:
         err = _check_dynamic_compatible(path)
@@ -285,30 +335,51 @@ class MainWindow(QMainWindow):
             self._status_file.setText(
                 f"  {b.name}  ·  {b.fmt}  ·  {b.arch}/{b.bits}bit  ·  entry {hex(b.entry_point)}"
             )
-        # Disable all actions while spawning; _on_process_stopped re-enables them
-        self._act_run.setEnabled(False)
-        self._act_step.setEnabled(False)
-        self._act_stepov.setEnabled(False)
-        self._act_cont.setEnabled(False)
-        self._act_stop.setEnabled(False)
+        self._disable_all_debug_actions()
         self._status_mode.setText("dynamic  ·  spawning…")
 
-        # Snapshot BPs set in static mode so they get synced after spawn
         pending_bps = set(self.session.breakpoints)
 
-        def _do_spawn():
+        def _do_spawn_work():
             backend.spawn(path)
-            # Process is now paused at entry BP — safe to register pending BPs
             for addr in pending_bps:
                 try:
                     backend.set_breakpoint(addr)
                 except Exception:
                     pass
 
-        worker = _DebugWorker(_do_spawn, self)
+        worker = _DebugWorker(_do_spawn_work, self)
         worker.error.connect(self._on_worker_error)
         worker.start()
         self._worker = worker
+
+    def _start_attach(self, pid: int) -> None:
+        from backends.frida_backend import FridaBackend
+        backend = FridaBackend()
+        self.session.setup(backend)
+        self._disable_all_debug_actions()
+        self._status_mode.setText(f"dynamic  ·  attaching to PID {pid}…")
+
+        pending_bps = set(self.session.breakpoints)
+
+        def _do_attach_work():
+            backend.attach(pid)
+            for addr in pending_bps:
+                try:
+                    backend.set_breakpoint(addr)
+                except Exception:
+                    pass
+
+        worker = _DebugWorker(_do_attach_work, self)
+        worker.error.connect(self._on_worker_error)
+        worker.finished.connect(lambda: self._on_attach_done(pid))
+        worker.start()
+        self._worker = worker
+
+    def _on_attach_done(self, pid: int) -> None:
+        """After attach completes the process is running — only Stop is valid."""
+        self._act_stop.setEnabled(True)
+        self._status_mode.setText(f"dynamic  ·  PID {pid}  ·  running")
 
     def _do_step(self) -> None:
         if not self._is_dynamic():
@@ -351,10 +422,51 @@ class MainWindow(QMainWindow):
         self._reset_to_static()
         if path:
             try:
-                self.session.load(path)   # reload into the fresh StaticBackend
+                self.session.load(path)
                 self._refresh_all()
             except Exception:
                 pass
+
+    def _do_toggle_bp(self) -> None:
+        addr = self.session.current_address
+        if addr is None:
+            return
+        model = self.disasm_panel._model
+        row = model.row_for_address(addr)
+        if row >= 0:
+            model.toggle_breakpoint(row)
+        else:
+            # Address not in current view — toggle directly on session + backend
+            if addr in self.session.breakpoints:
+                self.session.breakpoints.discard(addr)
+                try:
+                    self.session.backend.remove_breakpoint(addr)
+                except Exception:
+                    pass
+            else:
+                self.session.breakpoints.add(addr)
+                try:
+                    self.session.backend.set_breakpoint(addr)
+                except Exception:
+                    pass
+
+    def _do_goto(self) -> None:
+        if self.session.binary is None:
+            return
+        current_hex = hex(self.session.current_address) if self.session.current_address else "0x0"
+        addr_str, ok = QInputDialog.getText(
+            self, "Go to address", "Address (hex):", text=current_hex
+        )
+        if not ok or not addr_str.strip():
+            return
+        try:
+            addr = int(addr_str.strip(), 16)
+        except ValueError:
+            QMessageBox.warning(self, "Dirección inválida", f"'{addr_str}' no es una dirección hex válida.")
+            return
+        self.session.current_address = addr
+        self.disasm_panel.refresh(addr)
+        self._status_addr.setText(f"@ {hex(addr)}")
 
     # ── process-stopped handler (main thread, via queued signal) ─────────────
 
@@ -399,6 +511,12 @@ class MainWindow(QMainWindow):
         self._act_cont.setEnabled(paused)
         self._act_stop.setEnabled(paused)
         self._act_run.setEnabled(not paused)
+        self._act_attach.setEnabled(not paused)
+
+    def _disable_all_debug_actions(self) -> None:
+        for act in (self._act_run, self._act_attach, self._act_step,
+                    self._act_stepov, self._act_cont, self._act_stop):
+            act.setEnabled(False)
 
     def _reset_to_static(self) -> None:
         self._act_step.setEnabled(False)
@@ -406,9 +524,10 @@ class MainWindow(QMainWindow):
         self._act_cont.setEnabled(False)
         self._act_stop.setEnabled(False)
         self._act_run.setEnabled(self.session.binary is not None)
+        self._act_attach.setEnabled(True)
         self._status_mode.setText("static")
         self._status_addr.setText("")
-        self.registers_panel.refresh()   # clears to "—" (static backend returns {})
+        self.registers_panel.refresh()
         self.stack_panel.clear()
 
     def _is_dynamic(self) -> bool:
@@ -417,8 +536,6 @@ class MainWindow(QMainWindow):
 
     def _noop(self) -> None:
         pass
-
-    # ── helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
     def _action(
