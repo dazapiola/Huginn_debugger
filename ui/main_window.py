@@ -20,6 +20,39 @@ from ui.panels.stack_panel     import StackPanel
 from ui.panels.cfg_panel       import CfgPanel
 
 
+def _check_dynamic_compatible(path: str) -> str | None:
+    """Return an error message if the binary can't be spawned with Frida, else None."""
+    try:
+        import lief
+        binary = lief.parse(path)
+        if binary is None:
+            return None  # let Frida fail with its own error
+        fmt = str(binary.format)
+        if "ELF" in fmt:
+            has_interp = any("INTERP" in str(s.type) for s in binary.segments)
+            if not has_interp:
+                return (
+                    f"'{path}' es un binario ELF estáticamente linkeado.\n\n"
+                    "Frida requiere un dynamic linker (PT_INTERP) para inyectar su agente.\n\n"
+                    "Compilá el target con gcc para modo dinámico:\n"
+                    "  gcc -g -O0 -o target target.c\n\n"
+                    "El modo estático (Open binary) sigue disponible para análisis."
+                )
+        elif "PE" in fmt:
+            try:
+                imports = list(binary.imports)
+                if not imports:
+                    return (
+                        f"'{path}' es un PE sin imports — posiblemente estático.\n\n"
+                        "Frida necesita que el target tenga una tabla de imports (IAT)."
+                    )
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
+
+
 class _StopSignal(QObject):
     """Thread-safe bridge: Frida background thread emits → main thread slot."""
     fired = pyqtSignal()
@@ -235,6 +268,10 @@ class MainWindow(QMainWindow):
         self._start_dynamic(path)
 
     def _start_dynamic(self, path: str) -> None:
+        err = _check_dynamic_compatible(path)
+        if err:
+            QMessageBox.warning(self, "Binario no compatible con Frida", err)
+            return
         from backends.frida_backend import FridaBackend
         backend = FridaBackend()
         self.session.setup(backend)
