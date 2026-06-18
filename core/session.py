@@ -51,8 +51,45 @@ class Session:
         if self._cs is None or self.binary is None:
             return []
         from core import disasm as _disasm
-        data = self.backend.read_memory(addr, count * 16)
+        data = self._read_binary_bytes(addr, count * 16)
         return _disasm.disassemble(self._cs, data, addr, max_insns=count)
+
+    def _read_binary_bytes(self, addr: int, size: int) -> bytes:
+        """Read from the parsed binary file data — never from live process memory.
+
+        Using live memory for disassembly is wrong: Frida's Interceptor patches
+        the first bytes of every breakpointed address with a JMP trampoline.
+        Capstone would decode those hook bytes and misalign all subsequent
+        instructions, making the disasm look erased or reordered.
+
+        Falls back to live memory only when the address isn't covered by any
+        binary segment (e.g. PIE loaded at a runtime base, or dynamically
+        generated code).
+        """
+        if self.binary is None:
+            return b"\x00" * size
+
+        for seg in self.binary.segments:
+            if seg.kind != "LOAD":
+                continue
+            if seg.virtual_address <= addr < seg.virtual_address + seg.physical_size:
+                off = addr - seg.virtual_address
+                chunk = bytes(seg.content[off : off + size])
+                return chunk.ljust(size, b"\x00")
+
+        for sec in self.binary.sections:
+            if sec.virtual_address == 0:
+                continue
+            if sec.virtual_address <= addr < sec.virtual_address + sec.size:
+                off = addr - sec.virtual_address
+                chunk = bytes(sec.content[off : off + size])
+                return chunk.ljust(size, b"\x00")
+
+        # Address not in binary (PIE at runtime base, JIT, etc.) — use live memory
+        try:
+            return self.backend.read_memory(addr, size)
+        except Exception:
+            return b"\x00" * size
 
     def build_cfg_at(self, addr: int, max_bytes: int = 0x2000):
         if self._cs is None:

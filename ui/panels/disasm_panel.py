@@ -22,7 +22,12 @@ class DisasmModel(QAbstractTableModel):
     def reload(self, addr: int | None = None) -> None:
         self.beginResetModel()
         if self._session.binary is not None:
-            base = addr or self._session.current_address or self._session.binary.entry_point
+            if addr is not None:
+                base = addr
+            elif self._session.current_address is not None:
+                base = self._session.current_address
+            else:
+                base = self._session.binary.entry_point
             self._rows = self._session.disassemble_at(base, count=300)
         self.endResetModel()
 
