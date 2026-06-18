@@ -88,9 +88,16 @@ class DisasmModel(QAbstractTableModel):
         addr = self._rows[row].address
         if addr in self._session.breakpoints:
             self._session.breakpoints.discard(addr)
+            try:
+                self._session.backend.remove_breakpoint(addr)
+            except Exception:
+                pass
         else:
             self._session.breakpoints.add(addr)
-        # Redraw only the BP column for this row
+            try:
+                self._session.backend.set_breakpoint(addr)
+            except Exception:
+                pass
         tl = self.index(row, 0)
         br = self.index(row, 0)
         self.dataChanged.emit(tl, br)

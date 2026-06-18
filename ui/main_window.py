@@ -293,7 +293,19 @@ class MainWindow(QMainWindow):
         self._act_stop.setEnabled(False)
         self._status_mode.setText("dynamic  ·  spawning…")
 
-        worker = _DebugWorker(lambda: backend.spawn(path), self)
+        # Snapshot BPs set in static mode so they get synced after spawn
+        pending_bps = set(self.session.breakpoints)
+
+        def _do_spawn():
+            backend.spawn(path)
+            # Process is now paused at entry BP — safe to register pending BPs
+            for addr in pending_bps:
+                try:
+                    backend.set_breakpoint(addr)
+                except Exception:
+                    pass
+
+        worker = _DebugWorker(_do_spawn, self)
         worker.error.connect(self._on_worker_error)
         worker.start()
         self._worker = worker
@@ -327,6 +339,7 @@ class MainWindow(QMainWindow):
             self._set_paused(True)
 
     def _do_stop(self) -> None:
+        path = self.session.binary.path if self.session.binary else None
         if self._worker and self._worker.isRunning():
             self._worker.terminate()
             self._worker.wait(2000)
@@ -336,9 +349,12 @@ class MainWindow(QMainWindow):
             pass
         self.session.setup(StaticBackend())
         self._reset_to_static()
-        if self.session.binary:
-            self.session.current_address = self.session.binary.entry_point
-            self._refresh_all()
+        if path:
+            try:
+                self.session.load(path)   # reload into the fresh StaticBackend
+                self._refresh_all()
+            except Exception:
+                pass
 
     # ── process-stopped handler (main thread, via queued signal) ─────────────
 
