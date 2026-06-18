@@ -110,6 +110,13 @@ class MainWindow(QMainWindow):
 
         self.disasm_panel.address_selected.connect(self._on_address_selected)
 
+        self._plugin_panels: list = []
+        try:
+            from plugins import load_all
+            self._plugin_panels = load_all(self.session)
+        except Exception as exc:
+            print(f"[main] plugins load failed: {exc}")
+
     def _create_menus(self) -> None:
         mb = self.menuBar()
 
@@ -161,9 +168,19 @@ class MainWindow(QMainWindow):
 
         # ── Plugins ───────────────────────────────────────────────────────────
         self._plugins_menu = mb.addMenu("&Plugins")
-        self._plugins_menu.addAction(
-            self._action("Mona  (not loaded)", None, self._noop, enabled=False)
-        )
+        if self._plugin_panels:
+            for panel in self._plugin_panels:
+                act = self._action(
+                    panel.windowTitle(), None,
+                    lambda _, p=panel: p.setVisible(not p.isVisible()),
+                )
+                act.setCheckable(True)
+                act.setChecked(True)
+                self._plugins_menu.addAction(act)
+        else:
+            self._plugins_menu.addAction(
+                self._action("No plugins loaded", None, self._noop, enabled=False)
+            )
 
     def _create_toolbar(self) -> None:
         tb = self.addToolBar("Main")
@@ -220,6 +237,13 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(self._dock_regs, self._dock_stack)
         self._dock_regs.raise_()
         self.tabifyDockWidget(self._dock_hex, self._dock_cfg)
+
+        # Add plugin panels to bottom area, tabbed with hex/cfg
+        for panel in self._plugin_panels:
+            panel.setObjectName(panel.windowTitle().replace(" ", "_") + "_dock")
+            self.addDockWidget(B, panel)
+            self.tabifyDockWidget(self._dock_hex, panel)
+
         self._dock_cfg.raise_()
 
         self.resizeDocks(
