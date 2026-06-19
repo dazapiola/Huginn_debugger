@@ -1,6 +1,6 @@
 """Stack panel — shows RSP-relative words from the current stack frame."""
 from __future__ import annotations
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 import sys, os
@@ -10,6 +10,17 @@ from ui import theme
 
 _ROWS = 24
 _WORD = 8   # 64-bit
+
+
+def _bytes_to_ascii(raw: bytes) -> str:
+    """Return printable ASCII chars from raw bytes, stopping at first null."""
+    result = []
+    for b in raw:
+        if b == 0:
+            break
+        result.append(chr(b) if 0x20 <= b < 0x7f else ".")
+    s = "".join(result)
+    return s if len(s) >= 2 else ""
 
 
 class StackPanel(QWidget):
@@ -23,16 +34,26 @@ class StackPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._table = QTableWidget(_ROWS, 3)
-        self._table.setHorizontalHeaderLabels(["Offset", "Address", "Value"])
-        self._table.verticalHeader().setVisible(False)
+        self._table = QTableWidget(_ROWS, 4)
+        self._table.setHorizontalHeaderLabels(["Offset", "Address", "Value", "String"])
         self._table.setShowGrid(False)
-        self._table.horizontalHeader().setStretchLastSection(True)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self._table.verticalHeader().setDefaultSectionSize(20)
-        self._table.setColumnWidth(0, 60)
-        self._table.setColumnWidth(1, 120)
+
+        vh = self._table.verticalHeader()
+        assert vh is not None
+        vh.setVisible(False)
+        vh.setDefaultSectionSize(20)
+
+        hdr = self._table.horizontalHeader()
+        assert hdr is not None
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self._table.setColumnWidth(0, 72)    # RSP+0x00
+        self._table.setColumnWidth(1, 140)   # 0x00007fff...
+        self._table.setColumnWidth(2, 148)   # 0x00007fff...
 
         self._populate_empty()
         layout.addWidget(self._table)
@@ -40,7 +61,7 @@ class StackPanel(QWidget):
     def _populate_empty(self) -> None:
         font = theme.mono_font()
         for row in range(_ROWS):
-            for col in range(3):
+            for col in range(4):
                 item = QTableWidgetItem("—")
                 item.setForeground(QColor(theme.FG_DIM))
                 item.setFont(font)
@@ -66,6 +87,7 @@ class StackPanel(QWidget):
             raw      = data[offset:offset + _WORD]
             val      = int.from_bytes(raw, "little") if len(raw) == _WORD else 0
             is_rsp   = (row == 0)
+            ascii_s  = _bytes_to_ascii(raw)
 
             offset_item = QTableWidgetItem(f"RSP+{offset:#04x}")
             offset_item.setForeground(QColor(theme.ACCENT if is_rsp else theme.FG_DIM))
@@ -79,6 +101,14 @@ class StackPanel(QWidget):
             val_item.setForeground(QColor(theme.YELLOW if is_rsp else theme.FG))
             val_item.setFont(font)
 
+            str_item  = QTableWidgetItem(ascii_s)
+            str_item.setForeground(QColor(theme.GREEN if ascii_s else theme.FG_DIM))
+            str_item.setFont(font)
+
+            for item in (offset_item, addr_item, val_item, str_item):
+                item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
             self._table.setItem(row, 0, offset_item)
             self._table.setItem(row, 1, addr_item)
             self._table.setItem(row, 2, val_item)
+            self._table.setItem(row, 3, str_item)

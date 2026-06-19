@@ -57,6 +57,18 @@ class FridaBackend(DebuggerBackend):
         self._session = self._device.attach(pid)
         self._load_agent()
 
+    def get_main_path(self) -> str | None:
+        """Return the filesystem path of the process main module after attach."""
+        try:
+            mods = self._rpc.get_modules()
+            if mods:
+                path = mods[0]["path"]
+                if path and os.path.exists(path):
+                    return path
+        except Exception:
+            pass
+        return None
+
     def detach(self) -> None:
         for cleanup in (
             lambda: self._script and self._script.unload(),

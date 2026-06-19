@@ -137,11 +137,14 @@ class MainWindow(QMainWindow):
         # ── Debug ─────────────────────────────────────────────────────────────
         debug_menu = mb.addMenu("&Debug")
         self._act_run      = self._action("Run / Spawn",       "F5",     self._do_spawn)
+        self._act_restart  = self._action("Restart",           "Ctrl+R", self._do_restart,   enabled=False)
         self._act_step     = self._action("Step",              "F7",     self._do_step,      enabled=False)
         self._act_stepov   = self._action("Step Over",         "F8",     self._do_step_over, enabled=False)
         self._act_cont     = self._action("Continue",          "F9",     self._do_continue,  enabled=False)
         self._act_stop     = self._action("Stop",              "F12",    self._do_stop,      enabled=False)
         debug_menu.addAction(self._act_run)
+        debug_menu.addAction(self._act_restart)
+        debug_menu.addSeparator()
         debug_menu.addAction(self._act_step)
         debug_menu.addAction(self._act_stepov)
         debug_menu.addAction(self._act_cont)
@@ -191,6 +194,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self._act_attach)
         tb.addSeparator()
         tb.addAction(self._act_run)
+        tb.addAction(self._act_restart)
         tb.addAction(self._act_step)
         tb.addAction(self._act_stepov)
         tb.addAction(self._act_cont)
@@ -281,6 +285,7 @@ class MainWindow(QMainWindow):
             self._act_export.setEnabled(True)
             self._act_toggle_bp.setEnabled(True)
             self._act_goto.setEnabled(True)
+            self._act_restart.setEnabled(True)
         except Exception as exc:
             QMessageBox.critical(self, "Error loading binary", str(exc))
 
@@ -360,6 +365,7 @@ class MainWindow(QMainWindow):
                 f"  {b.name}  ·  {b.fmt}  ·  {b.arch}/{b.bits}bit  ·  entry {hex(b.entry_point)}"
             )
         self._disable_all_debug_actions()
+        self._act_restart.setEnabled(True)
         self._status_mode.setText("dynamic  ·  spawning…")
 
         pending_bps = set(self.session.breakpoints)
@@ -385,9 +391,11 @@ class MainWindow(QMainWindow):
         self._status_mode.setText(f"dynamic  ·  attaching to PID {pid}…")
 
         pending_bps = set(self.session.breakpoints)
+        _main_path: list[str | None] = [None]
 
         def _do_attach_work():
             backend.attach(pid)
+            _main_path[0] = backend.get_main_path()
             for addr in pending_bps:
                 try:
                     backend.set_breakpoint(addr)
@@ -396,13 +404,28 @@ class MainWindow(QMainWindow):
 
         worker = _DebugWorker(_do_attach_work, self)
         worker.error.connect(self._on_worker_error)
-        worker.finished.connect(lambda: self._on_attach_done(pid))
+        worker.finished.connect(lambda: self._on_attach_done(pid, _main_path[0]))
         worker.start()
         self._worker = worker
 
-    def _on_attach_done(self, pid: int) -> None:
-        """After attach completes the process is running — only Stop is valid."""
+    def _on_attach_done(self, pid: int, binary_path: str | None = None) -> None:
+        """After attach: load the binary from Frida's main module and refresh panels."""
         self._act_stop.setEnabled(True)
+        self._act_restart.setEnabled(True)
+        if binary_path:
+            try:
+                self.session.load(binary_path)
+                self._refresh_all()
+                b = self.session.binary
+                if b:
+                    self._status_file.setText(
+                        f"  {b.name}  ·  {b.fmt}  ·  {b.arch}/{b.bits}bit  ·  entry {hex(b.entry_point)}"
+                    )
+                    self._status_addr.setText(f"@ {hex(b.entry_point)}")
+            except Exception as exc:
+                self._status_file.setText(f"  PID {pid}  ·  binary not loaded: {exc}")
+        else:
+            self._status_file.setText(f"  PID {pid}  ·  binary path not found")
         self._status_mode.setText(f"dynamic  ·  PID {pid}  ·  running")
 
     def _do_step(self) -> None:
@@ -450,6 +473,36 @@ class MainWindow(QMainWindow):
                 self._refresh_all()
             except Exception:
                 pass
+
+    def _do_restart(self) -> None:
+        path = self.session.binary.path if self.session.binary else None
+        if not path:
+            return
+        was_dynamic = self._is_dynamic()
+        if self._worker and self._worker.isRunning():
+            self._worker.terminate()
+            self._worker.wait(2000)
+        try:
+            self.session.backend.detach()
+        except Exception:
+            pass
+        if was_dynamic:
+            self._start_dynamic(path)
+        else:
+            self.session.setup(StaticBackend())
+            self._reset_to_static()
+            try:
+                self.session.load(path)
+                self._refresh_all()
+                b = self.session.binary
+                if b:
+                    self._status_file.setText(
+                        f"  {b.name}  ·  {b.fmt}  ·  {b.arch}/{b.bits}bit  ·  entry {hex(b.entry_point)}"
+                    )
+                    self._status_addr.setText(f"@ {hex(b.entry_point)}")
+                    self._act_restart.setEnabled(True)
+            except Exception as exc:
+                QMessageBox.critical(self, "Error reloading binary", str(exc))
 
     def _do_toggle_bp(self) -> None:
         addr = self.session.current_address
@@ -548,6 +601,7 @@ class MainWindow(QMainWindow):
         self._act_cont.setEnabled(False)
         self._act_stop.setEnabled(False)
         self._act_run.setEnabled(self.session.binary is not None)
+        self._act_restart.setEnabled(self.session.binary is not None)
         self._act_attach.setEnabled(True)
         self._status_mode.setText("static")
         self._status_addr.setText("")

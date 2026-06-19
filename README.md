@@ -57,6 +57,24 @@ python3 main.py
 
 Luego: **File → Open binary…** (`Ctrl+O`)
 
+### Correr como root (necesario para attach a procesos)
+
+Frida requiere privilegios de root para inyectarse en procesos ajenos. Si los paquetes están instalados en un entorno de usuario (conda, venv, pyenv), `sudo python3` no los encuentra porque usa el Python del sistema.
+
+Usá el path absoluto al intérprete de tu entorno:
+
+```bash
+sudo /home/lodeale/miniconda3/bin/python3 main.py
+```
+
+Para no tener que escribirlo cada vez, agregá un alias a tu `~/.bashrc` o `~/.zshrc`:
+
+```bash
+alias huginn='sudo /home/lodeale/miniconda3/bin/python3 /ruta/completa/a/Huginn/main.py'
+```
+
+> Si tu entorno no es conda, reemplazá la ruta con la salida de `which python3` corriendo sin sudo.
+
 ---
 
 ## Interfaz

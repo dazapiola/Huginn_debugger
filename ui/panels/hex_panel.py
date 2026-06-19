@@ -1,26 +1,17 @@
 """Hex dump panel — shows binary data in classic hex+ASCII layout."""
 from __future__ import annotations
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QPlainTextEdit, QLabel
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QLabel,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from ui import theme
 
 _BYTES_PER_ROW = 16
-
-
-def _format_hex_dump(data: bytes, base_addr: int) -> str:
-    lines = []
-    for offset in range(0, len(data), _BYTES_PER_ROW):
-        chunk = data[offset:offset + _BYTES_PER_ROW]
-        addr  = base_addr + offset
-        # split into two groups of 8 for readability
-        hex_left  = " ".join(f"{b:02x}" for b in chunk[:8])
-        hex_right = " ".join(f"{b:02x}" for b in chunk[8:])
-        hex_str   = f"{hex_left:<23s}  {hex_right:<23s}"
-        ascii_part = "".join(chr(b) if 0x20 <= b < 0x7f else "." for b in chunk)
-        lines.append(f"0x{addr:08x}  {hex_str}  |{ascii_part}|")
-    return "\n".join(lines)
 
 
 class HexPanel(QWidget):
@@ -38,13 +29,28 @@ class HexPanel(QWidget):
         self._label = QLabel("  No binary loaded")
         self._label.setStyleSheet(f"color: {theme.FG_DIM}; padding: 4px 8px; font-size: 11px;")
 
-        self._text = QPlainTextEdit()
-        self._text.setReadOnly(True)
-        self._text.setFont(theme.mono_font())
-        self._text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self._table = QTableWidget(0, 3)
+        self._table.setHorizontalHeaderLabels(["Address", "Hex", "ASCII"])
+        self._table.setShowGrid(False)
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self._table.setFont(theme.mono_font())
+
+        vh = self._table.verticalHeader()
+        assert vh is not None
+        vh.setVisible(False)
+        vh.setDefaultSectionSize(18)
+
+        hdr = self._table.horizontalHeader()
+        assert hdr is not None
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self._table.setColumnWidth(0, 148)   # 0x0000000000401000
+        self._table.setColumnWidth(1, 408)   # 16 bytes × "xx " + middle gap
 
         layout.addWidget(self._label)
-        layout.addWidget(self._text)
+        layout.addWidget(self._table)
 
     def refresh(self, addr: int | None = None, size: int = 0x200) -> None:
         b = self._session.binary
@@ -57,6 +63,39 @@ class HexPanel(QWidget):
         data = self._session.backend.read_memory(target, size)
         self._label.setText(
             f"  {b.name}  ·  {b.fmt} {b.arch}  ·  "
-            f"Showing {size} bytes from 0x{target:x}"
+            f"Showing {size:#x} bytes from {target:#x}"
         )
-        self._text.setPlainText(_format_hex_dump(data, target))
+
+        font = theme.mono_font()
+        col_addr  = QColor(theme.COL_ADDR)
+        col_hex   = QColor(theme.FG)
+        col_ascii = QColor(theme.FG_DIM)
+
+        rows = []
+        for offset in range(0, len(data), _BYTES_PER_ROW):
+            chunk = data[offset:offset + _BYTES_PER_ROW]
+            row_addr  = target + offset
+            hex_left  = " ".join(f"{byte:02x}" for byte in chunk[:8])
+            hex_right = " ".join(f"{byte:02x}" for byte in chunk[8:])
+            hex_str   = f"{hex_left:<23}  {hex_right}"
+            ascii_str = "".join(chr(byte) if 0x20 <= byte < 0x7f else "." for byte in chunk)
+            rows.append((row_addr, hex_str, ascii_str))
+
+        self._table.setRowCount(len(rows))
+        for row_idx, (row_addr, hex_str, ascii_str) in enumerate(rows):
+            addr_item  = QTableWidgetItem(f"0x{row_addr:016x}")
+            hex_item   = QTableWidgetItem(hex_str)
+            ascii_item = QTableWidgetItem(ascii_str)
+
+            for item, color in (
+                (addr_item,  col_addr),
+                (hex_item,   col_hex),
+                (ascii_item, col_ascii),
+            ):
+                item.setFont(font)
+                item.setForeground(color)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+            self._table.setItem(row_idx, 0, addr_item)
+            self._table.setItem(row_idx, 1, hex_item)
+            self._table.setItem(row_idx, 2, ascii_item)
