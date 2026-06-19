@@ -17,6 +17,8 @@ class Session:
     process_name: Optional[str] = None
     breakpoints: set[int] = field(default_factory=set)
     current_address: Optional[int] = None
+    labels: dict[int, str] = field(default_factory=dict)        # addr → function name
+    loop_headers: set[int] = field(default_factory=set)         # addresses that are loop headers
 
     # backend and disassembler are set via setup()
     _backend: Optional["DebuggerBackend"] = field(default=None, repr=False)

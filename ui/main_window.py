@@ -114,6 +114,9 @@ class MainWindow(QMainWindow):
         try:
             from plugins import load_all
             self._plugin_panels = load_all(self.session)
+            for panel in self._plugin_panels:
+                if hasattr(panel, "navigate_to"):
+                    panel.navigate_to.connect(self._on_analysis_navigate)
         except Exception as exc:
             print(f"[main] plugins load failed: {exc}")
 
@@ -565,6 +568,12 @@ class MainWindow(QMainWindow):
         self.hex_panel.refresh(addr)
         self._status_addr.setText(f"@ {hex(addr)}")
 
+    def _on_analysis_navigate(self, addr: int) -> None:
+        self.session.current_address = addr
+        self.disasm_panel.refresh(addr)
+        self.hex_panel.refresh(addr)
+        self._status_addr.setText(f"@ {hex(addr)}")
+
     def _on_worker_error(self, msg: str) -> None:
         QMessageBox.critical(self, "Debugger error", msg)
         self._set_paused(True)
@@ -575,6 +584,9 @@ class MainWindow(QMainWindow):
             dock.setVisible(not dock.isVisible())
 
     def _refresh_all(self) -> None:
+        for panel in self._plugin_panels:
+            if hasattr(panel, "analyze"):
+                panel.analyze()
         self.disasm_panel.refresh()
         self.hex_panel.refresh()
         self.cfg_panel.refresh()

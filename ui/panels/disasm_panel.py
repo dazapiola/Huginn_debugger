@@ -9,8 +9,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from ui import theme
 
 
-_COLS   = ["", "Address", "Bytes", "Mnemonic", "Operands"]
-_WIDTHS = [20, 110, 160, 90, 260]
+_COLS   = ["", "Address", "Label", "Bytes", "Mnemonic", "Operands"]
+_WIDTHS = [20, 110, 150, 160, 90, 260]
+
+_BG_LOOP = QColor("#1e1a2e")   # subtle purple tint for loop headers
 
 
 class DisasmModel(QAbstractTableModel):
@@ -46,17 +48,21 @@ class DisasmModel(QAbstractTableModel):
         if not index.isValid() or index.row() >= len(self._rows):
             return None
 
-        insn  = self._rows[index.row()]
-        col   = index.column()
-        is_bp = insn.address in self._session.breakpoints
-        is_pc = insn.address == self._session.current_address
+        insn   = self._rows[index.row()]
+        col    = index.column()
+        addr   = insn.address
+        is_bp  = addr in self._session.breakpoints
+        is_pc  = addr == self._session.current_address
+        label  = self._session.labels.get(addr, "")
+        is_loop = addr in self._session.loop_headers
 
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0: return "●" if is_bp else ""
-            if col == 1: return f"0x{insn.address:08x}"
-            if col == 2: return insn.hex_bytes
-            if col == 3: return insn.mnemonic
-            if col == 4:
+            if col == 1: return f"0x{addr:08x}"
+            if col == 2: return label
+            if col == 3: return insn.hex_bytes
+            if col == 4: return insn.mnemonic
+            if col == 5:
                 if insn.jump_target:
                     return f"{insn.op_str}  → 0x{insn.jump_target:x}"
                 return insn.op_str
@@ -65,17 +71,20 @@ class DisasmModel(QAbstractTableModel):
             if is_bp and col == 0: return QColor(theme.COL_BP)
             if is_pc:              return QColor(theme.COL_CURRENT)
             if col == 1:           return QColor(theme.COL_ADDR)
-            if col == 2:           return QColor(theme.COL_BYTES)
-            if col == 3:
+            if col == 2:
+                if label:          return QColor(theme.GREEN)
+            if col == 3:           return QColor(theme.COL_BYTES)
+            if col == 4:
                 if insn.is_ret:    return QColor(theme.COL_RET)
                 if insn.is_call:   return QColor(theme.COL_CALL)
                 if insn.is_jump:   return QColor(theme.COL_JUMP)
                 return QColor(theme.COL_MNEM)
-            if col == 4:           return QColor(theme.COL_OPS)
+            if col == 5:           return QColor(theme.COL_OPS)
 
         if role == Qt.ItemDataRole.BackgroundRole:
-            if is_pc:   return QColor(theme.BG_SURFACE)
-            if is_bp:   return QColor("#2a1a1a")
+            if is_pc:    return QColor(theme.BG_SURFACE)
+            if is_bp:    return QColor("#2a1a1a")
+            if is_loop:  return _BG_LOOP
             return QColor(theme.BG)
 
         if role == Qt.ItemDataRole.FontRole:
@@ -133,19 +142,20 @@ class DisasmPanel(QWidget):
         self._view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._view.setShowGrid(False)
-        self._view.verticalHeader().setVisible(False)
-        self._view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self._view.setWordWrap(False)
 
-        # Column widths
+        vh = self._view.verticalHeader()
+        assert vh is not None
+        vh.setVisible(False)
+        vh.setDefaultSectionSize(20)
+
+        hdr = self._view.horizontalHeader()
+        assert hdr is not None
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(True)
+
         for i, w in enumerate(_WIDTHS):
             self._view.setColumnWidth(i, w)
-        self._view.horizontalHeader().setStretchLastSection(True)
-
-        # Row height
-        self._view.verticalHeader().setDefaultSectionSize(20)
-
-        # Click to toggle BP
         self._view.clicked.connect(self._on_click)
 
         layout.addWidget(self._view)

@@ -12,4 +12,9 @@ def load_all(session) -> list:
         panels.append(MonaPanel(session))
     except Exception as exc:
         print(f"[plugins] mona load failed: {exc}")
+    try:
+        from plugins.analysis.panel import AnalysisPanel
+        panels.append(AnalysisPanel(session))
+    except Exception as exc:
+        print(f"[plugins] analysis load failed: {exc}")
     return panels
