@@ -4,7 +4,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QDockWidget, QFileDialog, QInputDialog,
+    QDialog, QMainWindow, QDockWidget, QFileDialog, QInputDialog,
     QLabel, QStatusBar, QMessageBox,
 )
 from PyQt6.QtCore import Qt, QSize, QObject, QThread, pyqtSignal
@@ -316,15 +316,12 @@ class MainWindow(QMainWindow):
     def _do_attach(self) -> None:
         if self._worker and self._worker.isRunning():
             return
-        pid_str, ok = QInputDialog.getText(
-            self, "Attach to process", "PID:"
-        )
-        if not ok or not pid_str.strip():
+        from ui.process_picker import ProcessPickerDialog
+        dlg = ProcessPickerDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        try:
-            pid = int(pid_str.strip())
-        except ValueError:
-            QMessageBox.warning(self, "PID inválido", f"'{pid_str}' no es un número válido.")
+        pid = dlg.selected_pid()
+        if pid is None:
             return
         self._start_attach(pid)
 

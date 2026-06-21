@@ -256,14 +256,21 @@ class GDBBackend(DebuggerBackend):
         if self._log_callback:
             self._log_callback(f"Attaching to PID {pid}…", "evt")
 
-        # -target-attach sends ^done, then *stopped once the process is paused.
+        # -target-attach stops the inferior.  Newer GDB sends ^done + *stopped;
+        # some older versions embed stop info in ^done without a separate *stopped.
+        # We wait for *stopped with a short timeout, then proceed regardless —
+        # GDB always stops the process on attach in all-stop mode.
         stop_ev = threading.Event()
         self._startup_handler = lambda: stop_ev.set()
         resp = self._cmd(f'-target-attach {pid}', timeout=15)
         if resp.get("class") == "error":
             self._startup_handler = None
             raise RuntimeError(resp.get("raw", "attach failed"))
-        stop_ev.wait(timeout=15)
+        # If *stopped didn't arrive within 3s, the stop info was already in ^done.
+        if not stop_ev.wait(timeout=3):
+            # Force a stop to ensure the inferior is paused before we read it.
+            self._cmd("-exec-interrupt", timeout=3)
+            stop_ev.wait(timeout=5)
         self._startup_handler = None
 
         self._pid = pid
