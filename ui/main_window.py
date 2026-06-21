@@ -401,11 +401,10 @@ class MainWindow(QMainWindow):
         if not self._is_dynamic():
             return
         self._set_paused(False)
-        try:
-            self.session.backend.continue_()
-        except Exception as exc:
-            QMessageBox.critical(self, "Continue error", str(exc))
-            self._set_paused(True)
+        worker = _DebugWorker(self.session.backend.continue_, self)
+        worker.error.connect(self._on_worker_error)
+        worker.start()
+        self._worker = worker
 
     def _do_stop(self) -> None:
         path = self.session.binary.path if self.session.binary else None

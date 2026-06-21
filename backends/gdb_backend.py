@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import os
+import pty
 import queue
 import re
+import select
 import subprocess
 import sys
 import threading
@@ -47,6 +49,11 @@ class GDBBackend(DebuggerBackend):
 
         self._reader_thread: Optional[threading.Thread] = None
 
+        # PTY for inferior I/O — keeps inferior stdin/stdout off the GDB/MI pipe.
+        self._inf_master_fd: Optional[int] = None
+        self._inf_slave_fd:  Optional[int] = None
+        self._inf_slave_name: str = ""
+
     # ── callback ──────────────────────────────────────────────────────────────
 
     def set_stop_callback(self, cb: Callable[[int], None]) -> None:
@@ -77,6 +84,12 @@ class GDBBackend(DebuggerBackend):
     # ── GDB subprocess ────────────────────────────────────────────────────────
 
     def _start_gdb(self) -> None:
+        # PTY pair: inferior uses slave end, we read inferior output from master.
+        master, slave = pty.openpty()
+        self._inf_master_fd = master
+        self._inf_slave_fd  = slave
+        self._inf_slave_name = os.ttyname(slave)
+
         self._proc = subprocess.Popen(
             [_GDB, "--interpreter=mi2", "--quiet"],
             stdin=subprocess.PIPE,
@@ -87,6 +100,7 @@ class GDBBackend(DebuggerBackend):
         )
         self._reader_thread = threading.Thread(target=self._reader, daemon=True)
         self._reader_thread.start()
+        threading.Thread(target=self._inf_reader, daemon=True).start()
 
     def _next_token(self) -> int:
         with self._token_lock:
@@ -113,7 +127,33 @@ class GDBBackend(DebuggerBackend):
             self._pending.pop(tok, None)
         return result
 
-    # ── reader thread ─────────────────────────────────────────────────────────
+    # ── reader threads ────────────────────────────────────────────────────────
+
+    def _inf_reader(self) -> None:
+        """Read inferior stdout/stderr from the PTY master and forward to log."""
+        mfd = self._inf_master_fd
+        if mfd is None:
+            return
+        buf = b""
+        while True:
+            try:
+                r, _, _ = select.select([mfd], [], [], 0.5)
+            except (ValueError, OSError):
+                break
+            if not r:
+                continue
+            try:
+                chunk = os.read(mfd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                text = line.rstrip(b"\r").decode("utf-8", errors="replace").strip()
+                if text and self._log_callback:
+                    self._log_callback(text, "out")
 
     def _reader(self) -> None:
         assert self._proc and self._proc.stdout
@@ -207,6 +247,11 @@ class GDBBackend(DebuggerBackend):
     def spawn(self, path: str, args: list[str] | None = None) -> None:
         self._start_gdb()
         self._cmd(f'-file-exec-and-symbols "{path}"', timeout=15)
+
+        # Redirect inferior I/O to PTY — keeps the GDB/MI pipe free of program output
+        # and prevents the inferior's read() from consuming our MI commands.
+        if self._inf_slave_name:
+            self._cmd(f'-gdb-set inferior-tty {self._inf_slave_name}')
 
         if args:
             self._cmd(f'-exec-arguments {" ".join(args)}')
@@ -317,6 +362,15 @@ class GDBBackend(DebuggerBackend):
                 pass
         self._proc = None
         self._pid  = None
+
+        for fd in (self._inf_master_fd, self._inf_slave_fd):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        self._inf_master_fd = None
+        self._inf_slave_fd  = None
 
     # ── execution control ─────────────────────────────────────────────────────
 
