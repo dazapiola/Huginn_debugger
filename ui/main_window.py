@@ -19,6 +19,7 @@ from ui.panels.registers_panel    import RegistersPanel
 from ui.panels.stack_panel        import StackPanel
 from ui.panels.cfg_panel          import CfgPanel
 from ui.panels.breakpoints_panel  import BreakpointsPanel
+from ui.panels.log_panel          import LogPanel
 
 
 class _StopSignal(QObject):
@@ -77,6 +78,7 @@ class MainWindow(QMainWindow):
         self.stack_panel        = StackPanel(self.session)
         self.cfg_panel          = CfgPanel(self.session)
         self.breakpoints_panel  = BreakpointsPanel(self.session)
+        self.log_panel          = LogPanel(self.session)
 
         self.disasm_panel.address_selected.connect(self._on_address_selected)
         self.breakpoints_panel.navigate_to.connect(self._on_analysis_navigate)
@@ -138,6 +140,7 @@ class MainWindow(QMainWindow):
             ("Stack",       "_dock_stack"),
             ("CFG",         "_dock_cfg"),
             ("Breakpoints", "_dock_bps"),
+            ("Log",         "_dock_log"),
         ):
             act = self._action(title, None, lambda _, a=dock_attr: self._toggle_dock(a))
             act.setCheckable(True)
@@ -213,11 +216,13 @@ class MainWindow(QMainWindow):
         self._dock_bps    = dock("Breakpoints",  self.breakpoints_panel, R)
         self._dock_hex    = dock("Hex Dump",     self.hex_panel,         B)
         self._dock_cfg    = dock("CFG",          self.cfg_panel,         B)
+        self._dock_log    = dock("Log",          self.log_panel,         B)
 
         self.tabifyDockWidget(self._dock_regs, self._dock_stack)
         self.tabifyDockWidget(self._dock_stack, self._dock_bps)
         self._dock_regs.raise_()
         self.tabifyDockWidget(self._dock_hex, self._dock_cfg)
+        self.tabifyDockWidget(self._dock_cfg, self._dock_log)
 
         # Add plugin panels to bottom area, tabbed with hex/cfg
         for panel in self._plugin_panels:
@@ -520,6 +525,7 @@ class MainWindow(QMainWindow):
         self._status_addr.setText(f"@ {hex(addr)}")
 
     def _on_worker_error(self, msg: str) -> None:
+        self.session.emit_log(f"Error: {msg}", "err")
         QMessageBox.critical(self, "Debugger error", msg)
         self._set_paused(True)
 

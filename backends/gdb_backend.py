@@ -33,6 +33,7 @@ class GDBBackend(DebuggerBackend):
 
         # Set while spawn() handles a stop internally; _handle_stopped returns early.
         self._startup_handler: Optional[Callable[[], None]] = None
+        self._log_callback:   Optional[Callable[[str, str], None]] = None
 
         self._token      = 0
         self._token_lock = threading.Lock()
@@ -50,6 +51,9 @@ class GDBBackend(DebuggerBackend):
 
     def set_stop_callback(self, cb: Callable[[int], None]) -> None:
         self._stop_callback = cb
+
+    def set_log_callback(self, cb: Callable[[str, str], None]) -> None:
+        self._log_callback = cb
 
     # ── binary loading ────────────────────────────────────────────────────────
 
@@ -135,8 +139,23 @@ class GDBBackend(DebuggerBackend):
         # Async stop — handle in a separate thread so the reader keeps reading.
         if line.startswith("*stopped"):
             threading.Thread(target=self._handle_stopped, args=(line,), daemon=True).start()
+            return
 
-        # *running, ~"...", =notify, &log — no action needed.
+        # GDB console output — forward to log as-is.
+        if line.startswith('~"') or line.startswith('@"'):
+            kind = "out" if line.startswith('@"') else "gdb"
+            raw = line[2:]
+            if raw.endswith('"'):
+                raw = raw[:-1]
+            text = raw.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\').replace('\\t', '\t')
+            if self._log_callback:
+                for part in text.splitlines():
+                    part = part.strip()
+                    if part:
+                        self._log_callback(part, kind)
+            return
+
+        # *running, =notify, &log — no action needed.
 
     def _handle_stopped(self, line: str) -> None:
         # During spawn() startup phases, just signal the waiting event.
@@ -193,6 +212,8 @@ class GDBBackend(DebuggerBackend):
             self._cmd(f'-exec-arguments {" ".join(args)}')
 
         is_pie = self._binary_info is not None and self._binary_info.base_address == 0
+        if self._log_callback:
+            self._log_callback(f"Spawning {os.path.basename(path)}  ({'PIE' if is_pie else 'non-PIE'})", "evt")
         if is_pie:
             self._spawn_pie(path)
         else:
@@ -210,6 +231,8 @@ class GDBBackend(DebuggerBackend):
         self._startup_handler = None
 
         self._resolve_pid()
+        if self._log_callback and self._pid:
+            self._log_callback(f"Process started, PID {self._pid}", "evt")
         self._fetch_registers()
         runtime_pc = self._regs.get("rip", 0)
         if self._stop_callback:
@@ -238,6 +261,8 @@ class GDBBackend(DebuggerBackend):
         entry_ev.wait(timeout=30)
         self._startup_handler = None
 
+        if self._log_callback and self._pid:
+            self._log_callback(f"Process started, PID {self._pid}", "evt")
         self._fetch_registers()
         runtime_pc = self._regs.get("rip", 0)
         if self._stop_callback:

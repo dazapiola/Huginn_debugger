@@ -32,11 +32,16 @@ class Session:
     _bp_listeners: list[Callable[[], None]] = field(
         default_factory=list, repr=False
     )
+    _log_listeners: list[Callable[[str, str], None]] = field(
+        default_factory=list, repr=False
+    )
 
     def setup(self, backend: "DebuggerBackend") -> None:
         self._backend = backend
         if hasattr(backend, "set_stop_callback"):
             backend.set_stop_callback(self.notify_stopped)
+        if hasattr(backend, "set_log_callback"):
+            backend.set_log_callback(self.emit_log)
 
     @property
     def backend(self) -> "DebuggerBackend":
@@ -103,6 +108,9 @@ class Session:
     def notify_stopped(self, rip: int) -> None:
         """Called from any thread when the process pauses (breakpoint / step)."""
         self.current_address = rip
+        label = self.labels.get(rip, "")
+        suffix = f"  ({label})" if label else ""
+        self.emit_log(f"Stopped at {hex(rip)}{suffix}")
         for fn in self._stop_listeners:
             fn(rip)
 
@@ -115,6 +123,13 @@ class Session:
 
     def on_breakpoints_changed(self, fn: Callable[[], None]) -> None:
         self._bp_listeners.append(fn)
+
+    def emit_log(self, msg: str, kind: str = "evt") -> None:
+        for fn in self._log_listeners:
+            fn(msg, kind)
+
+    def on_log(self, fn: Callable[[str, str], None]) -> None:
+        self._log_listeners.append(fn)
 
     # ── mona logging bridge ───────────────────────────────────────────────────
 

@@ -55,6 +55,9 @@ class DebuggerBackend(ABC):
     def set_stop_callback(self, _cb) -> None:
         pass
 
+    def set_log_callback(self, _cb) -> None:
+        pass
+
     # ── memory ────────────────────────────────────────────────────────────────
 
     @abstractmethod
