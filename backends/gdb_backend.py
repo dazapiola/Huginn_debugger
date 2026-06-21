@@ -242,7 +242,45 @@ class GDBBackend(DebuggerBackend):
                     pass
         self._regs = regs
 
-    # ── spawn ─────────────────────────────────────────────────────────────────
+    # ── attach / spawn ────────────────────────────────────────────────────────
+
+    def attach(self, pid: int) -> None:
+        self._start_gdb()
+
+        if self._binary_info:
+            self._cmd(f'-file-exec-and-symbols "{self._binary_info.path}"', timeout=15)
+
+        if self._inf_slave_name:
+            self._cmd(f'-gdb-set inferior-tty {self._inf_slave_name}')
+
+        if self._log_callback:
+            self._log_callback(f"Attaching to PID {pid}…", "evt")
+
+        # -target-attach sends ^done, then *stopped once the process is paused.
+        stop_ev = threading.Event()
+        self._startup_handler = lambda: stop_ev.set()
+        resp = self._cmd(f'-target-attach {pid}', timeout=15)
+        if resp.get("class") == "error":
+            self._startup_handler = None
+            raise RuntimeError(resp.get("raw", "attach failed"))
+        stop_ev.wait(timeout=15)
+        self._startup_handler = None
+
+        self._pid = pid
+
+        if self._binary_info:
+            if self._binary_info.base_address == 0:
+                self._runtime_base = self._read_runtime_base_from_maps(self._binary_info.path)
+            else:
+                self._runtime_base = self._binary_info.base_address
+
+        if self._log_callback:
+            self._log_callback(f"Attached to PID {pid}", "evt")
+
+        self._fetch_registers()
+        runtime_pc = self._regs.get("rip", 0)
+        if self._stop_callback:
+            self._stop_callback(self._to_static(runtime_pc))
 
     def spawn(self, path: str, args: list[str] | None = None) -> None:
         self._start_gdb()

@@ -374,10 +374,61 @@ class MainWindow(QMainWindow):
         self._status_mode.setText(f"dynamic{pid_str}  ·  running")
 
     def _start_attach(self, pid: int) -> None:
-        QMessageBox.information(
-            self, "Attach no implementado",
-            "GDB attach aún no está implementado.\n\nUsá 'Run / Spawn' para iniciar un proceso nuevo."
-        )
+        from backends.gdb_backend import GDBBackend
+
+        try:
+            exe_path = os.readlink(f"/proc/{pid}/exe")
+        except OSError:
+            QMessageBox.critical(
+                self, "Attach error",
+                f"No se puede leer /proc/{pid}/exe.\n"
+                "Verificá que el PID existe y tenés permisos suficientes."
+            )
+            return
+
+        backend = GDBBackend()
+        self.session.setup(backend)
+
+        try:
+            self.session.load(exe_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Error cargando binario", str(exc))
+            return
+
+        b = self.session.binary
+        if b:
+            self._status_file.setText(
+                f"  {b.name}  ·  {b.fmt}  ·  {b.arch}/{b.bits}bit  ·  entry {hex(b.entry_point)}"
+            )
+        self._refresh_all()
+
+        self._disable_all_debug_actions()
+        self._act_stop.setEnabled(True)
+        self._status_mode.setText(f"dynamic  ·  attaching to PID {pid}…")
+
+        pending_bps = set(self.session.breakpoints)
+
+        def _do_attach_work() -> None:
+            backend.attach(pid)
+            for addr in pending_bps:
+                try:
+                    backend.set_breakpoint(addr)
+                except Exception:
+                    pass
+
+        worker = _DebugWorker(_do_attach_work, self)
+        worker.error.connect(self._on_worker_error)
+        worker.finished.connect(lambda: self._on_attach_done(backend, pid))
+        worker.start()
+        self._worker = worker
+
+    def _on_attach_done(self, backend, pid: int) -> None:
+        # _on_process_stopped fires first (from _stop_callback) if *stopped arrived.
+        # This callback updates the status label; the guard avoids double-pausing.
+        if self._act_step.isEnabled():
+            return
+        self._act_stop.setEnabled(True)
+        self._status_mode.setText(f"dynamic  ·  PID {pid}  ·  attached")
 
     def _do_step(self) -> None:
         if not self._is_dynamic():
