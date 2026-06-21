@@ -376,31 +376,54 @@ class MainWindow(QMainWindow):
     def _start_attach(self, pid: int) -> None:
         from backends.gdb_backend import GDBBackend
 
+        # Try to auto-detect the binary path from /proc.
+        exe_path: str | None = None
         try:
-            exe_path = os.readlink(f"/proc/{pid}/exe")
-        except OSError:
-            QMessageBox.critical(
-                self, "Attach error",
-                f"No se puede leer /proc/{pid}/exe.\n"
-                "Verificá que el PID existe y tenés permisos suficientes."
+            raw = os.readlink(f"/proc/{pid}/exe")
+            exe_path = raw.removesuffix(" (deleted)") if raw else None
+        except FileNotFoundError:
+            QMessageBox.critical(self, "Attach error", f"No existe el proceso con PID {pid}.")
+            return
+        except PermissionError:
+            # Huginn no tiene permisos para leer /proc/PID/exe (necesitaría root).
+            # Ofrecemos selección manual del binario.
+            ans = QMessageBox.question(
+                self, "Permiso denegado",
+                f"/proc/{pid}/exe: permiso denegado.\n\n"
+                "¿Querés seleccionar el binario manualmente?\n"
+                "(Si no, se attachea sin símbolos — funcionalidad reducida.)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
             )
+            if ans == QMessageBox.StandardButton.Cancel:
+                return
+            if ans == QMessageBox.StandardButton.Yes:
+                exe_path, _ = QFileDialog.getOpenFileName(
+                    self, "Seleccionar binario del proceso", "", "Executables (*)"
+                )
+                if not exe_path:
+                    return
+            # else: exe_path stays None → attach blind
+        except OSError as exc:
+            QMessageBox.critical(self, "Attach error", f"/proc/{pid}/exe: {exc}")
             return
 
         backend = GDBBackend()
         self.session.setup(backend)
 
-        try:
-            self.session.load(exe_path)
-        except Exception as exc:
-            QMessageBox.critical(self, "Error cargando binario", str(exc))
-            return
-
-        b = self.session.binary
-        if b:
-            self._status_file.setText(
-                f"  {b.name}  ·  {b.fmt}  ·  {b.arch}/{b.bits}bit  ·  entry {hex(b.entry_point)}"
-            )
-        self._refresh_all()
+        if exe_path:
+            try:
+                self.session.load(exe_path)
+            except Exception as exc:
+                QMessageBox.critical(self, "Error cargando binario", str(exc))
+                return
+            b = self.session.binary
+            if b:
+                self._status_file.setText(
+                    f"  {b.name}  ·  {b.fmt}  ·  {b.arch}/{b.bits}bit  ·  entry {hex(b.entry_point)}"
+                )
+            self._refresh_all()
+        else:
+            self._status_file.setText(f"  PID {pid}  ·  (sin binario)")
 
         self._disable_all_debug_actions()
         self._act_stop.setEnabled(True)
