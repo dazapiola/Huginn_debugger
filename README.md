@@ -1,6 +1,7 @@
 # Huginn Debugger
 
-Huginn es un debugger multiplataforma para análisis de binarios orientado a seguridad ofensiva y reverse engineering. Soporta análisis estático (sin ejecutar el binario) y, en versiones futuras, debugging dinámico de procesos vivos.
+Huginn es un debugger para análisis de binarios orientado a seguridad ofensiva y reverse engineering.
+Soporta análisis estático y debugging dinámico de procesos vivos via GDB/MI.
 
 El nombre viene de uno de los cuervos de Odín — el que representa el pensamiento y la observación.
 
@@ -8,12 +9,13 @@ El nombre viene de uno de los cuervos de Odín — el que representa el pensamie
 
 ## ¿Para qué sirve?
 
-- Cargar y analizar binarios ELF (Linux) y PE (Windows) sin ejecutarlos
-- Ver el disassembly con colores por tipo de instrucción
-- Inspeccionar el contenido en hexadecimal
-- Visualizar el grafo de flujo de control (CFG) de funciones
-- (próximamente) Debuggear procesos vivos con breakpoints, step, registros y stack en tiempo real
-- (próximamente) Integración con **mona** de Corelan para tareas de exploiting
+- Cargar y analizar binarios ELF/PE sin ejecutarlos
+- Disassembly con colores por tipo de instrucción y labels de funciones automáticos
+- Vista hex+ASCII, CFG interactivo, registros y stack en tiempo real
+- Debugging dinámico: breakpoints, step, step-over, continue
+- Spawn de binarios (PIE y non-PIE, estáticos y dinámicos) o attach a procesos corriendo
+- Panel de logs: output del proceso, mensajes GDB, eventos del debugger
+- Panel de breakpoints: lista de BPs activos con navegación rápida
 
 ---
 
@@ -23,16 +25,15 @@ El nombre viene de uno de los cuervos de Odín — el que representa el pensamie
 |---|---|
 | Parsing de binarios (ELF/PE) | [LIEF](https://lief.re/) |
 | Disassembly | [Capstone](https://www.capstone-engine.org/) |
+| Debugging dinámico | GDB/MI (`gdb --interpreter=mi2`) |
 | Grafo de flujo de control | [networkx](https://networkx.org/) |
-| Debugging dinámico | [Frida](https://frida.re/) *(Fase 3)* |
-| Assembler | [Keystone](https://www.keystone-engine.org/) *(Fase 6)* |
 | UI | [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) |
 
 ---
 
 ## Instalación
 
-**Requisitos**: Python 3.11+
+**Requisitos**: Python 3.11+, GDB instalado (`apt install gdb`)
 
 ```bash
 cd hacking/Huginn
@@ -43,7 +44,7 @@ pip install -r requirements.txt
 
 ## Uso
 
-### Abrir un binario desde la línea de comandos
+### Abrir desde línea de comandos
 
 ```bash
 python3 main.py /ruta/al/binario
@@ -57,23 +58,25 @@ python3 main.py
 
 Luego: **File → Open binary…** (`Ctrl+O`)
 
-### Correr como root (necesario para attach a procesos)
+### Correr como root (necesario para attach a procesos ajenos)
 
-Frida requiere privilegios de root para inyectarse en procesos ajenos. Si los paquetes están instalados en un entorno de usuario (conda, venv, pyenv), `sudo python3` no los encuentra porque usa el Python del sistema.
+GDB necesita privilegios de ptrace para attachear a procesos que no son del usuario actual.
 
-Usá el path absoluto al intérprete de tu entorno:
+```bash
+sudo /ruta/al/python3 main.py
+```
+
+Si Python está en un entorno virtual:
 
 ```bash
 sudo /home/lodeale/miniconda3/bin/python3 main.py
 ```
 
-Para no tener que escribirlo cada vez, agregá un alias a tu `~/.bashrc` o `~/.zshrc`:
+Para no tener que escribirlo cada vez:
 
 ```bash
-alias huginn='sudo /home/lodeale/miniconda3/bin/python3 /ruta/completa/a/Huginn/main.py'
+alias huginn='sudo /home/lodeale/miniconda3/bin/python3 /ruta/a/Huginn/main.py'
 ```
-
-> Si tu entorno no es conda, reemplazá la ruta con la salida de `which python3` corriendo sin sudo.
 
 ---
 
@@ -83,18 +86,20 @@ alias huginn='sudo /home/lodeale/miniconda3/bin/python3 /ruta/completa/a/Huginn/
 ┌──────────────────────────────────────────────────────────────────┐
 │  File  Debug  View  Plugins               [toolbar]              │
 ├────────────────────────────┬─────────────────────────────────────┤
-│  Disassembly               │  Registers  /  Stack (tabs)         │
-│                            │                                      │
+│  Disassembly               │  Registers / Stack / Breakpoints    │
+│                            │  (tabs)                             │
 │  ● 0x401000  push rbp      │  RAX  0x0000000000000000            │
 │    0x401001  mov rbp, rsp  │  RBX  0x0000000000000000            │
 │  > 0x401004  jne → 0x410c  │  RIP  0x0000000000401004            │
 │                            │                                      │
 ├────────────────────────────┴─────────────────────────────────────┤
-│  Hex Dump  /  CFG (tabs)                                         │
+│  Hex Dump / CFG / Log (tabs)                                     │
 │                                                                  │
-│  0x401000  55 48 89 e5 ...  |UH..|   [CFG graph view]            │
+│  11:23:01 EVT  Stopped at 0x401110  (_start)                     │
+│  11:23:04 GDB  Temporary breakpoint 1, 0x401110 in _start ()     │
+│  11:23:08 OUT  Enter password:                                   │
 └──────────────────────────────────────────────────────────────────┘
-│  static  ·  @ 0x401000  ·  binary.elf · ELF · x86_64/64bit      │
+│  dynamic  ·  PID 12345  ·  @ 0x401110  ·  crackme · ELF · x64  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -102,22 +107,27 @@ alias huginn='sudo /home/lodeale/miniconda3/bin/python3 /ruta/completa/a/Huginn/
 
 | Panel | Descripción |
 |---|---|
-| **Disassembly** | Instrucciones del binario con colores. Click en la columna `●` para toggle breakpoint. Click en una fila para sincronizar el hex dump a esa dirección. |
-| **Registers** | Valores de todos los registros x86_64. En modo dinámico se actualiza en cada pausa y resalta en amarillo los que cambiaron. |
+| **Disassembly** | Instrucciones del binario con colores y labels. Click en `●` para toggle breakpoint. |
+| **Registers** | Valores de registros x86_64. Se actualiza en cada pausa; resalta en amarillo los que cambiaron. |
 | **Stack** | Contenido del stack relativo a RSP. Disponible en modo dinámico. |
-| **Hex Dump** | Vista hex+ASCII del binario. Se sincroniza al hacer click en el panel de disassembly. |
-| **CFG** | Grafo de flujo de control de la función actual. Zoom con la rueda del mouse, pan arrastrando. Aristas verdes = branch verdadero, rojas = branch falso. |
+| **Hex Dump** | Vista hex+ASCII del binario. Se sincroniza al hacer click en disassembly. |
+| **CFG** | Grafo de flujo de control. Zoom con rueda, pan arrastrando. |
+| **Breakpoints** | Lista de BPs activos. Click → navega al disasm. Delete → elimina. |
+| **Log** | Output del proceso (OUT), mensajes GDB (GDB), eventos del debugger (EVT), errores (ERR). |
 
-### Colores del disassembly
+### Atajos de teclado
 
-| Color | Tipo de instrucción |
+| Tecla | Acción |
 |---|---|
-| Azul | Instrucción general |
-| Naranja | Jump condicional / incondicional |
-| Verde | Call |
-| Rojo | Return |
-| Cyan | Dirección |
-| Gris | Bytes raw |
+| `F5` | Run / Spawn |
+| `F7` | Step Into |
+| `F8` | Step Over |
+| `F9` | Continue |
+| `F12` | Stop |
+| `Ctrl+O` | Abrir binario |
+| `Ctrl+P` | Attach a proceso |
+| `Ctrl+R` | Restart |
+| `Ctrl+G` | Ir a dirección |
 
 ---
 
@@ -125,29 +135,36 @@ alias huginn='sudo /home/lodeale/miniconda3/bin/python3 /ruta/completa/a/Huginn/
 
 ```
 Huginn/
-├── main.py                  ← entry point
+├── main.py                      ← entry point
 ├── requirements.txt
-├── .plan                    ← plan de desarrollo completo
+├── backlog.md
 ├── core/
-│   ├── binary.py            ← parseo de ELF/PE con LIEF
-│   ├── disasm.py            ← disassembly con Capstone
-│   ├── cfg.py               ← construcción del CFG con networkx
-│   └── session.py           ← estado global: backend, binary, breakpoints
+│   ├── binary.py                ← parseo ELF/PE con LIEF
+│   ├── disasm.py                ← disassembly con Capstone
+│   ├── cfg.py                   ← construcción del CFG con networkx
+│   └── session.py               ← estado global: backend, binary, breakpoints, logs
 ├── backends/
-│   ├── base.py              ← interfaz abstracta DebuggerBackend
-│   ├── static_backend.py    ← backend de solo lectura (archivo en disco)
-│   └── frida_backend.py     ← (Fase 3) attach/spawn a procesos vivos
+│   ├── base.py                  ← interfaz abstracta DebuggerBackend
+│   ├── static_backend.py        ← backend de solo lectura (archivo en disco)
+│   └── gdb_backend.py           ← GDB/MI: spawn, attach, PTY, breakpoints, registros
 ├── ui/
-│   ├── theme.py             ← dark theme (Catppuccin Mocha)
-│   ├── main_window.py       ← ventana principal con docks
+│   ├── theme.py                 ← dark theme (Catppuccin Mocha)
+│   ├── main_window.py           ← ventana principal con docks
+│   ├── process_picker.py        ← diálogo de selección de proceso
 │   └── panels/
 │       ├── disasm_panel.py
 │       ├── hex_panel.py
 │       ├── registers_panel.py
 │       ├── stack_panel.py
-│       └── cfg_panel.py
+│       ├── cfg_panel.py
+│       ├── breakpoints_panel.py
+│       └── log_panel.py
 └── plugins/
-    └── mona/                ← (Fase 6) integración con mona de Corelan
+    ├── __init__.py
+    └── analysis/                ← labels de funciones + detección de loops
+        ├── __init__.py
+        ├── engine.py
+        └── panel.py
 ```
 
 ---
@@ -157,10 +174,11 @@ Huginn/
 | Fase | Descripción | Estado |
 |---|---|---|
 | **Fase 1** | Core engine: LIEF + Capstone + CFG + Session | ✅ Completa |
-| **Fase 2** | UI estática: ventana Qt con los 5 paneles | ✅ Completa |
-| **Fase 3** | Backend Frida: attach/spawn, breakpoints, registros | ✅ Completa |
-| **Fase 4** | Live panels: registros y stack en tiempo real | ⏳ Pendiente |
-| **Fase 5** | Polish: toolbar completo, menú Debug habilitado | ⏳ Pendiente |
+| **Fase 2** | UI estática: ventana Qt con los paneles | ✅ Completa |
+| **Fase 3** | Backend GDB/MI: spawn/attach, breakpoints, registros, PIE | ✅ Completa |
+| **Fase 4** | Live panels: registros, stack, breakpoints, log en tiempo real | ✅ Completa |
+| **Fase 5** | Polish: toolbar, attach con process picker, export, status bar | ✅ Completa |
+| **Fase 7** | Plugin Analysis: function labels + loop detection | ✅ Completa |
 | **Fase 6** | Plugin mona (Corelan): exploiting tools integradas | ⏳ Pendiente |
 
 ---
@@ -168,14 +186,12 @@ Huginn/
 ## Verificación rápida
 
 ```bash
-# Fase 1 — core engine (static analysis)
+# Análisis estático
 python3 test_phase1.py
 
-# Fase 3 — Frida dynamic backend
-python3 test_phase3.py
+# Debugging dinámico
+sudo python3 main.py crackme_pwn
+# → F5 para spawn → para en _start
+# → F9 Continue → proceso corre
+# → Ves output del proceso en el log panel (OUT)
 ```
-
-`test_phase1.py` carga `../clase1/crackme` y verifica disassembly, CFG y hex dump por consola.  
-`test_phase3.py` requiere `../clase1/crackme_dyn` (compilado con `gcc -g -O0`): spawn, módulos, lectura de memoria, breakpoints y registros en tiempo real.
-
-> **Nota**: Frida requiere que el target sea un binario dinámicamente linkeado. El `crackme` original (estático) no es compatible con la inyección de Frida.
