@@ -59,11 +59,6 @@ class Session:
     def _read_binary_bytes(self, addr: int, size: int) -> bytes:
         """Read from the parsed binary file data — never from live process memory.
 
-        Using live memory for disassembly is wrong: Frida's Interceptor patches
-        the first bytes of every breakpointed address with a JMP trampoline.
-        Capstone would decode those hook bytes and misalign all subsequent
-        instructions, making the disasm look erased or reordered.
-
         Falls back to live memory only when the address isn't covered by any
         binary segment (e.g. PIE loaded at a runtime base, or dynamically
         generated code).

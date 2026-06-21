@@ -1,7 +1,7 @@
 """Disassembly panel — QTableView with a custom model over Instruction list."""
 from __future__ import annotations
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableView, QHeaderView, QAbstractItemView
-from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, pyqtSignal
+from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -165,8 +165,13 @@ class DisasmPanel(QWidget):
         if self._session.current_address is not None:
             row = self._model.row_for_address(self._session.current_address)
             if row >= 0:
-                self._view.scrollTo(self._model.index(row, 0))
-                self._view.selectRow(row)
+                idx = self._model.index(row, 0)
+                # Defer scroll: endResetModel schedules a viewport relayout
+                # asynchronously; calling scrollTo immediately uses stale geometry.
+                QTimer.singleShot(0, lambda: (
+                    self._view.scrollTo(idx, QAbstractItemView.ScrollHint.PositionAtTop),
+                    self._view.selectRow(row),
+                ))
 
     def _on_click(self, index: QModelIndex) -> None:
         if index.column() == 0:

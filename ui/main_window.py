@@ -20,45 +20,13 @@ from ui.panels.stack_panel     import StackPanel
 from ui.panels.cfg_panel       import CfgPanel
 
 
-def _check_dynamic_compatible(path: str) -> str | None:
-    """Return an error message if the binary can't be spawned with Frida, else None."""
-    try:
-        import lief
-        binary = lief.parse(path)
-        if binary is None:
-            return None
-        fmt = str(binary.format)
-        if "ELF" in fmt:
-            has_interp = any("INTERP" in str(s.type) for s in binary.segments)
-            if not has_interp:
-                return (
-                    f"'{path}' es un binario ELF estáticamente linkeado.\n\n"
-                    "Frida requiere un dynamic linker (PT_INTERP) para inyectar su agente.\n\n"
-                    "Compilá el target con gcc para modo dinámico:\n"
-                    "  gcc -g -O0 -o target target.c\n\n"
-                    "El modo estático (Open binary) sigue disponible para análisis."
-                )
-        elif "PE" in fmt:
-            try:
-                if not list(binary.imports):
-                    return (
-                        f"'{path}' es un PE sin imports — posiblemente estático.\n\n"
-                        "Frida necesita que el target tenga una tabla de imports (IAT)."
-                    )
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return None
-
-
 class _StopSignal(QObject):
-    """Thread-safe bridge: Frida background thread emits → main thread slot."""
+    """Thread-safe bridge: GDB reader thread emits → main thread slot."""
     fired = pyqtSignal()
 
 
 class _DebugWorker(QThread):
-    """Runs a blocking Frida call off the main thread."""
+    """Runs a blocking GDB call off the main thread."""
     error = pyqtSignal(str)
 
     def __init__(self, fn, parent=None):
@@ -350,12 +318,8 @@ class MainWindow(QMainWindow):
         self._start_attach(pid)
 
     def _start_dynamic(self, path: str) -> None:
-        err = _check_dynamic_compatible(path)
-        if err:
-            QMessageBox.warning(self, "Binario no compatible con Frida", err)
-            return
-        from backends.frida_backend import FridaBackend
-        backend = FridaBackend()
+        from backends.gdb_backend import GDBBackend
+        backend = GDBBackend()
         self.session.setup(backend)
         try:
             self.session.load(path)
@@ -383,53 +347,26 @@ class MainWindow(QMainWindow):
 
         worker = _DebugWorker(_do_spawn_work, self)
         worker.error.connect(self._on_worker_error)
+        worker.finished.connect(lambda: self._on_spawn_running(backend))
         worker.start()
         self._worker = worker
 
-    def _start_attach(self, pid: int) -> None:
-        from backends.frida_backend import FridaBackend
-        backend = FridaBackend()
-        self.session.setup(backend)
-        self._disable_all_debug_actions()
-        self._status_mode.setText(f"dynamic  ·  attaching to PID {pid}…")
-
-        pending_bps = set(self.session.breakpoints)
-        _main_path: list[str | None] = [None]
-
-        def _do_attach_work():
-            backend.attach(pid)
-            _main_path[0] = backend.get_main_path()
-            for addr in pending_bps:
-                try:
-                    backend.set_breakpoint(addr)
-                except Exception:
-                    pass
-
-        worker = _DebugWorker(_do_attach_work, self)
-        worker.error.connect(self._on_worker_error)
-        worker.finished.connect(lambda: self._on_attach_done(pid, _main_path[0]))
-        worker.start()
-        self._worker = worker
-
-    def _on_attach_done(self, pid: int, binary_path: str | None = None) -> None:
-        """After attach: load the binary from Frida's main module and refresh panels."""
+    def _on_spawn_running(self, backend) -> None:
+        # GDB spawn() blocks until the entry stop, so _on_process_stopped may have
+        # already run by the time this fires.  Don't override the paused state.
+        if self._act_step.isEnabled():
+            return
+        pid = getattr(backend, "_pid", None)
         self._act_stop.setEnabled(True)
         self._act_restart.setEnabled(True)
-        if binary_path:
-            try:
-                self.session.load(binary_path)
-                self._refresh_all()
-                b = self.session.binary
-                if b:
-                    self._status_file.setText(
-                        f"  {b.name}  ·  {b.fmt}  ·  {b.arch}/{b.bits}bit  ·  entry {hex(b.entry_point)}"
-                    )
-                    self._status_addr.setText(f"@ {hex(b.entry_point)}")
-            except Exception as exc:
-                self._status_file.setText(f"  PID {pid}  ·  binary not loaded: {exc}")
-        else:
-            self._status_file.setText(f"  PID {pid}  ·  binary path not found")
-        self._status_mode.setText(f"dynamic  ·  PID {pid}  ·  running")
+        pid_str = f"  ·  PID {pid}" if pid else ""
+        self._status_mode.setText(f"dynamic{pid_str}  ·  running")
+
+    def _start_attach(self, pid: int) -> None:
+        QMessageBox.information(
+            self, "Attach no implementado",
+            "GDB attach aún no está implementado.\n\nUsá 'Run / Spawn' para iniciar un proceso nuevo."
+        )
 
     def _do_step(self) -> None:
         if not self._is_dynamic():
@@ -621,8 +558,8 @@ class MainWindow(QMainWindow):
         self.stack_panel.clear()
 
     def _is_dynamic(self) -> bool:
-        from backends.frida_backend import FridaBackend
-        return isinstance(self.session.backend, FridaBackend)
+        from backends.gdb_backend import GDBBackend
+        return isinstance(self.session.backend, GDBBackend)
 
     def _noop(self) -> None:
         pass
