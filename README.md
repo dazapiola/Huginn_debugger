@@ -1,9 +1,15 @@
-# Huginn Debugger
+<p align="center">
+  <img src="logo/cuervo_huginn.png" alt="Huginn" width="560"/>
+</p>
+
+# Huginn Debugger `v1.0.0`
 
 Huginn es un debugger para análisis de binarios orientado a seguridad ofensiva y reverse engineering.
 Soporta análisis estático y debugging dinámico de procesos vivos via GDB/MI.
 
 El nombre viene de uno de los cuervos de Odín — el que representa el pensamiento y la observación.
+
+**Autor:** Alejandro Zapiola — **Co-autor:** Claude (Anthropic)
 
 ---
 
