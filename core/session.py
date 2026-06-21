@@ -29,6 +29,9 @@ class Session:
     _stop_listeners: list[Callable[[int], None]] = field(
         default_factory=list, repr=False
     )
+    _bp_listeners: list[Callable[[], None]] = field(
+        default_factory=list, repr=False
+    )
 
     def setup(self, backend: "DebuggerBackend") -> None:
         self._backend = backend
@@ -105,6 +108,13 @@ class Session:
 
     def on_stopped(self, fn: Callable[[int], None]) -> None:
         self._stop_listeners.append(fn)
+
+    def notify_breakpoints_changed(self) -> None:
+        for fn in self._bp_listeners:
+            fn()
+
+    def on_breakpoints_changed(self, fn: Callable[[], None]) -> None:
+        self._bp_listeners.append(fn)
 
     # ── mona logging bridge ───────────────────────────────────────────────────
 

@@ -115,6 +115,7 @@ class DisasmModel(QAbstractTableModel):
         tl = self.index(row, 0)
         br = self.index(row, 0)
         self.dataChanged.emit(tl, br)
+        self._session.notify_breakpoints_changed()
 
     def row_for_address(self, addr: int) -> int:
         for i, insn in enumerate(self._rows):

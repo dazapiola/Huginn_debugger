@@ -13,11 +13,12 @@ from PyQt6.QtGui import QAction, QKeySequence
 from core.session import Session
 from backends.static_backend import StaticBackend
 from ui import theme
-from ui.panels.disasm_panel    import DisasmPanel
-from ui.panels.hex_panel       import HexPanel
-from ui.panels.registers_panel import RegistersPanel
-from ui.panels.stack_panel     import StackPanel
-from ui.panels.cfg_panel       import CfgPanel
+from ui.panels.disasm_panel       import DisasmPanel
+from ui.panels.hex_panel          import HexPanel
+from ui.panels.registers_panel    import RegistersPanel
+from ui.panels.stack_panel        import StackPanel
+from ui.panels.cfg_panel          import CfgPanel
+from ui.panels.breakpoints_panel  import BreakpointsPanel
 
 
 class _StopSignal(QObject):
@@ -70,13 +71,15 @@ class MainWindow(QMainWindow):
         self._arrange_docks()
 
     def _create_panels(self) -> None:
-        self.disasm_panel    = DisasmPanel(self.session)
-        self.hex_panel       = HexPanel(self.session)
-        self.registers_panel = RegistersPanel(self.session)
-        self.stack_panel     = StackPanel(self.session)
-        self.cfg_panel       = CfgPanel(self.session)
+        self.disasm_panel       = DisasmPanel(self.session)
+        self.hex_panel          = HexPanel(self.session)
+        self.registers_panel    = RegistersPanel(self.session)
+        self.stack_panel        = StackPanel(self.session)
+        self.cfg_panel          = CfgPanel(self.session)
+        self.breakpoints_panel  = BreakpointsPanel(self.session)
 
         self.disasm_panel.address_selected.connect(self._on_address_selected)
+        self.breakpoints_panel.navigate_to.connect(self._on_analysis_navigate)
 
         self._plugin_panels: list = []
         try:
@@ -134,6 +137,7 @@ class MainWindow(QMainWindow):
             ("Registers",   "_dock_regs"),
             ("Stack",       "_dock_stack"),
             ("CFG",         "_dock_cfg"),
+            ("Breakpoints", "_dock_bps"),
         ):
             act = self._action(title, None, lambda _, a=dock_attr: self._toggle_dock(a))
             act.setCheckable(True)
@@ -203,13 +207,15 @@ class MainWindow(QMainWindow):
         R = Qt.DockWidgetArea.RightDockWidgetArea
         B = Qt.DockWidgetArea.BottomDockWidgetArea
 
-        self._dock_disasm = dock("Disassembly", self.disasm_panel,    L)
-        self._dock_regs   = dock("Registers",   self.registers_panel, R)
-        self._dock_stack  = dock("Stack",        self.stack_panel,     R)
-        self._dock_hex    = dock("Hex Dump",     self.hex_panel,       B)
-        self._dock_cfg    = dock("CFG",          self.cfg_panel,       B)
+        self._dock_disasm = dock("Disassembly", self.disasm_panel,       L)
+        self._dock_regs   = dock("Registers",   self.registers_panel,   R)
+        self._dock_stack  = dock("Stack",        self.stack_panel,       R)
+        self._dock_bps    = dock("Breakpoints",  self.breakpoints_panel, R)
+        self._dock_hex    = dock("Hex Dump",     self.hex_panel,         B)
+        self._dock_cfg    = dock("CFG",          self.cfg_panel,         B)
 
         self.tabifyDockWidget(self._dock_regs, self._dock_stack)
+        self.tabifyDockWidget(self._dock_stack, self._dock_bps)
         self._dock_regs.raise_()
         self.tabifyDockWidget(self._dock_hex, self._dock_cfg)
 
@@ -466,6 +472,7 @@ class MainWindow(QMainWindow):
                     self.session.backend.set_breakpoint(addr)
                 except Exception:
                     pass
+            self.session.notify_breakpoints_changed()
 
     def _do_goto(self) -> None:
         if self.session.binary is None:
@@ -492,6 +499,7 @@ class MainWindow(QMainWindow):
         self.disasm_panel.refresh()
         self.registers_panel.refresh()
         self.stack_panel.refresh()
+        self.breakpoints_panel.refresh()
         addr = self.session.current_address or 0
         self._status_addr.setText(f"@ {hex(addr)}")
         pid = getattr(self.session.backend, "_pid", None)
