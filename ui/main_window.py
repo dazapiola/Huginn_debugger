@@ -165,7 +165,8 @@ class MainWindow(QMainWindow):
 
         # ── Ayuda ─────────────────────────────────────────────────────────────
         help_menu = mb.addMenu("A&yuda")
-        help_menu.addAction(self._action("Acerca de Huginn…", None, self._do_about))
+        self._act_about = self._action("Acerca de Huginn…", None, self._do_about)
+        help_menu.addAction(self._act_about)
 
     def _do_about(self) -> None:
         from ui.about_dialog import AboutDialog
