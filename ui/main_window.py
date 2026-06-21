@@ -163,6 +163,14 @@ class MainWindow(QMainWindow):
                 self._action("No plugins loaded", None, self._noop, enabled=False)
             )
 
+        # ── Ayuda ─────────────────────────────────────────────────────────────
+        help_menu = mb.addMenu("A&yuda")
+        help_menu.addAction(self._action("Acerca de Huginn…", None, self._do_about))
+
+    def _do_about(self) -> None:
+        from ui.about_dialog import AboutDialog
+        AboutDialog(self).exec()
+
     def _create_toolbar(self) -> None:
         tb = self.addToolBar("Main")
         tb.setMovable(False)
