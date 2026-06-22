@@ -9,10 +9,11 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QFont
 
 from ui import theme
+from _version import __version__
 
 _LOGO = os.path.join(os.path.dirname(__file__), "..", "logo", "cuervo_huginn.png")
 
-_VERSION = "1.0.0"
+_VERSION = __version__
 _AUTHOR  = "Alejandro Zapiola"
 _COAUTHOR = "Claude (Anthropic)"
 
