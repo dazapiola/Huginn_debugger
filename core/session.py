@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from backends.base import DebuggerBackend
     from core.binary import BinaryInfo
     from core.disasm import Instruction
+    from exploit.context import ExploitContext
 
 
 @dataclass
@@ -23,6 +24,7 @@ class Session:
     # backend and disassembler are set via setup()
     _backend: Optional["DebuggerBackend"] = field(default=None, repr=False)
     _cs: Optional["capstone.Cs"] = field(default=None, repr=False)
+    exploit_ctx: Optional["ExploitContext"] = field(default=None, repr=False)
     _mona_log_handlers: list[Callable[[str], None]] = field(
         default_factory=list, repr=False
     )
@@ -55,7 +57,18 @@ class Session:
         assert self.binary is not None
         self._cs = _disasm.create_disassembler(self.binary.arch, self.binary.bits)
         self.current_address = self.binary.entry_point
+        self._init_exploit_context()
         return self.binary
+
+    def _init_exploit_context(self) -> None:
+        if self.binary is None:
+            self.exploit_ctx = None
+            return
+        try:
+            from exploit.context import ExploitContext
+            self.exploit_ctx = ExploitContext.from_binary(self.binary)
+        except Exception:
+            self.exploit_ctx = None
 
     def disassemble_at(self, addr: int, count: int = 50) -> list["Instruction"]:
         if self._cs is None or self.binary is None:
