@@ -22,6 +22,7 @@ from ui.panels.breakpoints_panel  import BreakpointsPanel
 from ui.panels.log_panel          import LogPanel
 from ui.panels.rop_panel          import ROPPanel
 from ui.panels.exploit_console    import ExploitConsolePanel
+from ui.panels.shellcraft_panel   import ShellcraftPanel
 
 
 class _StopSignal(QObject):
@@ -83,10 +84,17 @@ class MainWindow(QMainWindow):
         self.log_panel          = LogPanel(self.session)
         self.rop_panel          = ROPPanel(self.session)
         self.exploit_console    = ExploitConsolePanel(self.session)
+        self.shellcraft_panel   = ShellcraftPanel(self.session)
 
         self.disasm_panel.address_selected.connect(self._on_address_selected)
         self.breakpoints_panel.navigate_to.connect(self._on_analysis_navigate)
         self.rop_panel.navigate_to.connect(self._on_analysis_navigate)
+        self.shellcraft_panel.shellcode_ready.connect(
+            lambda shellcode, name: (
+                self.exploit_console.inject_shellcode(shellcode, name),
+                self._dock_exploit.raise_(),
+            )
+        )
 
         self._plugin_panels: list = []
         try:
@@ -148,6 +156,7 @@ class MainWindow(QMainWindow):
             ("Log",            "_dock_log"),
             ("ROP Gadgets",    "_dock_rop"),
             ("Exploit Console","_dock_exploit"),
+            ("Shellcraft",     "_dock_shellcraft"),
         ):
             act = self._action(title, None, lambda _, a=dock_attr: self._toggle_dock(a))
             act.setCheckable(True)
@@ -234,7 +243,8 @@ class MainWindow(QMainWindow):
         self._dock_cfg    = dock("CFG",          self.cfg_panel,         B)
         self._dock_log    = dock("Log",          self.log_panel,         B)
         self._dock_rop     = dock("ROP Gadgets",   self.rop_panel,       B)
-        self._dock_exploit = dock("Exploit Console", self.exploit_console, B)
+        self._dock_exploit    = dock("Exploit Console", self.exploit_console,  B)
+        self._dock_shellcraft = dock("Shellcraft",      self.shellcraft_panel, B)
 
         self.tabifyDockWidget(self._dock_regs, self._dock_stack)
         self.tabifyDockWidget(self._dock_stack, self._dock_bps)
@@ -243,6 +253,7 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(self._dock_cfg, self._dock_log)
         self.tabifyDockWidget(self._dock_log, self._dock_rop)
         self.tabifyDockWidget(self._dock_rop, self._dock_exploit)
+        self.tabifyDockWidget(self._dock_exploit, self._dock_shellcraft)
 
         # Add plugin panels to bottom area, tabbed with hex/cfg
         for panel in self._plugin_panels:
@@ -639,6 +650,7 @@ class MainWindow(QMainWindow):
             self.rop_panel._gadgets = []
             self.rop_panel._table.setRowCount(0)
         self.exploit_console.refresh_namespace()
+        self.shellcraft_panel.refresh_arch()
 
     # ── state helpers ─────────────────────────────────────────────────────────
 
